@@ -26,7 +26,7 @@ def test_lists_sing_song_model(monkeypatch: MonkeyPatch) -> None:
     response = _client().get("/v1/models", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
     ids = [item["id"] for item in response.json()["data"]]
-    assert ids == ["sing-song", "sing-voices"]
+    assert ids == ["sing-song", "sing-voices", "sing-search"]
 
 
 def test_voices_endpoint_points_to_plaza(monkeypatch: MonkeyPatch, tmp_path) -> None:
@@ -656,3 +656,47 @@ def test_search_endpoint_rejects_empty_query(monkeypatch: MonkeyPatch) -> None:
         json={"query": "   "},
     )
     assert response.status_code == 400
+
+
+def test_search_model_returns_candidates_without_rendering(
+    monkeypatch: MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("SING_GATEWAY_TOKEN", "secret")
+
+    def fail_render(payload: dict[str, object]) -> dict[str, object]:
+        raise AssertionError("search model must not render")
+
+    monkeypatch.setattr(sing, "_render", fail_render)
+    seen: dict[str, object] = {}
+
+    def fake_search(query: str, limit: int = 3, source: str = "bilibili"):
+        from sing_gateway.config import SongCandidate
+
+        seen.update({"query": query, "limit": limit, "source": source})
+        return [
+            SongCandidate(title="晴天", artist="周杰伦", duration_seconds=269, url="https://b/BV9")
+        ]
+
+    monkeypatch.setattr(sing, "search_songs", fake_search)
+    response = _client().post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer secret"},
+        json={
+            "model": "sing-search",
+            "messages": [{"role": "user", "content": json.dumps({"query": "晴天", "limit": 3})}],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == "sing-search"
+    content = json.loads(body["choices"][0]["message"]["content"])
+    assert content["type"] == "candidates"
+    assert content["data"][0]["title"] == "晴天"
+    assert seen == {"query": "晴天", "limit": 3, "source": "bilibili"}
+
+
+def test_models_endpoint_lists_search_model(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("SING_GATEWAY_TOKEN", "secret")
+    response = _client().get("/v1/models", headers={"Authorization": "Bearer secret"})
+    ids = [item["id"] for item in response.json()["data"]]
+    assert ids == ["sing-song", "sing-voices", "sing-search"]

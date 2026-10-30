@@ -86,6 +86,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = "sing-song"
 _VOICES_MODEL = "sing-voices"
+_SEARCH_MODEL = "sing-search"
 _VOICES_NOTE = (
     "音色列表已迁移到音色广场：打开 plaza_url 挑选音色，点歌时把音色名传给 voice。"
     "自有 RVC 音色可在广场页提交上传（自动审核），通过后会显示音色名。"
@@ -243,7 +244,7 @@ def list_models() -> dict[str, Any]:
                 "created": 0,
                 "owned_by": "octop",
             }
-            for model in (_DEFAULT_MODEL, _VOICES_MODEL)
+            for model in (_DEFAULT_MODEL, _VOICES_MODEL, _SEARCH_MODEL)
         ],
     }
 
@@ -282,11 +283,36 @@ def _voices_block() -> dict[str, Any]:
     }
 
 
+def _candidates_block(payload: dict[str, Any]) -> dict[str, Any]:
+    query = " ".join(str(payload.get("query") or "").split())
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    limit = _as_int(payload.get("limit"), 3, minimum=1, maximum=5)
+    source = str(
+        payload.get("source") or os.environ.get("SING_MUSIC_SOURCE", "") or "bilibili"
+    ).strip()
+    candidates = search_songs(query, limit, source)
+    return {
+        "type": "candidates",
+        "query": query,
+        "data": [item.as_dict() for item in candidates],
+    }
+
+
 @app.post("/v1/chat/completions", dependencies=[Depends(_require_token)])
 async def chat_completions(body: ChatCompletionRequest) -> dict[str, Any]:
     model = (body.model or _DEFAULT_MODEL).strip()
     if model == _VOICES_MODEL:
         block: dict[str, Any] = _voices_block()
+    elif model == _SEARCH_MODEL:
+        try:
+            block = await asyncio.to_thread(_candidates_block, _request_payload(body))
+        except HTTPException:
+            raise
+        except ClientSongError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
     else:
         payload = _request_payload(body)
         try:

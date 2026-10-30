@@ -30,8 +30,10 @@ pip install "sing-gateway[modelscope]" # + ModelScope uploads (recommended in CN
 pip install "sing-gateway[hf]"         # + Hugging Face uploads
 ```
 
-Two console scripts are installed: `sing-gateway` (the service) and
-`sing-catalog-scrape` (refresh the public voice catalog).
+Three console scripts are installed: `sing-gateway` (the service),
+`sing-catalog-scrape` (refresh the public voice catalog) and
+`sing-voice-overrides` (re-point catalog entries whose upstream zip is broken;
+run it after a scrape).
 
 ## Run the gateway
 
@@ -201,10 +203,12 @@ sing-catalog-scrape --limit 200
    - Base URL: `http://<octop-host>:9001/v1`
    - Key: the same value as `SING_GATEWAY_TOKEN`
 2. Add model `sing-song` to the channel.
-3. Add model `sing-voices` to the channel too and price it at **0**: clients
-   use it to fetch the voice plaza link through new-api (see
-   [Voice catalog](#voice-catalog)). It never runs a generation; the gateway
-   only returns the guide block.
+3. Add models `sing-voices` and `sing-search` to the channel too and price both
+   at **0**: clients
+   use `sing-voices` to fetch the voice plaza link and `sing-search` to search
+   songs (the confirm step) through new-api. Neither runs a generation; the
+   gateway only returns the guide/candidate block. Directly reachable clients
+   use `POST /v1/songs/search` instead.
 4. Set the `sing-song` price to **per-call billing** (`QuotaType=1`). With the
    1:1 RMB/USD convention, `0.7` per call covers the worst-case cold start
    (about $0.08 of T4 time) with a healthy margin.
