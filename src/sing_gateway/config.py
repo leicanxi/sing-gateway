@@ -64,11 +64,24 @@ class SingResult:
     audio_url: str
     filename: str
     cached: bool = False
+    title: str = ""
+    artist: str = ""
+    duration_seconds: int = 0
 
     def as_block(self) -> dict[str, Any]:
-        return {
+        block: dict[str, Any] = {
             "type": "audio",
             "source": {"type": "url", "url": self.audio_url},
             "media_type": "audio/mpeg",
             "filename": self.filename,
+            "cached": self.cached,
         }
+        if self.duration_seconds > 0:
+            block["duration_seconds"] = self.duration_seconds
+        # Clients show these so the user can tell which version was sung without
+        # listening to the whole clip.
+        if self.title:
+            block["title"] = self.title
+        if self.artist:
+            block["artist"] = self.artist
+        return block

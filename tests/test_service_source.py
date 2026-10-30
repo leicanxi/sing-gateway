@@ -6,7 +6,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from sing_gateway import bilibili, netease, service
-from sing_gateway.config import ClientSongError, SingConfig, SongCandidate
+from sing_gateway.config import ClientSongError, SingConfig, SingResult, SongCandidate
 
 
 def _candidate(song_id: int, title: str = "song") -> SongCandidate:
@@ -137,3 +137,58 @@ def test_pick_candidate_falls_back_when_probe_unavailable(monkeypatch: MonkeyPat
     monkeypatch.setattr(netease, "track_info", probe_fails)
     picked = service._pick_candidate("大鱼", SingConfig(music_source="netease"))
     assert picked.url.endswith("id=1")
+
+
+class _SearchResponse:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _SearchClient:
+    """Minimal fake httpx client: every GET answers the search payload."""
+
+    def __init__(self, songs: list[dict]) -> None:
+        self._payload = {"code": 200, "result": {"songs": songs}}
+
+    def __enter__(self) -> _SearchClient:
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+    def get(self, url: str, params: dict | None = None, **kwargs: object) -> _SearchResponse:
+        return _SearchResponse(self._payload)
+
+
+def test_pick_candidate_follows_the_source_match_ranking(monkeypatch: MonkeyPatch) -> None:
+    """The source's ranking decides: plain 稻香 beats the 深情版 upload."""
+    songs = [
+        {"id": 1, "name": "稻香(深情版)", "artists": [{"name": "Lucky小爱"}], "duration": 231000},
+        {"id": 2, "name": "稻香", "artists": [{"name": "Lie"}], "duration": 196000},
+    ]
+    monkeypatch.setattr(netease.httpx, "Client", lambda **kwargs: _SearchClient(songs))
+    ranked = netease.search_netease("稻香", 5)
+    _patch_search(monkeypatch, ranked)
+    monkeypatch.setattr(netease, "track_info", lambda url: (True, 320.0, None))
+    monkeypatch.setattr(netease, "window_has_lyrics", lambda url, start, duration: True)
+    picked = service._pick_candidate("稻香", SingConfig(music_source="netease"))
+    assert picked.url.endswith("id=2")
+
+
+def test_render_song_by_query_labels_the_picked_song(monkeypatch: MonkeyPatch) -> None:
+    """The block must name the version that was sung, not just the file name."""
+    picked = _candidate(1, "稻香")
+    monkeypatch.setattr(service, "_pick_candidate", lambda song, cfg: picked)
+    monkeypatch.setattr(
+        service, "render_song", lambda url, cfg: SingResult("https://cdn/a.mp3", "a.mp3")
+    )
+    result = service.render_song_by_query("稻香", SingConfig(music_source="netease"))
+    assert result.audio_url == "https://cdn/a.mp3"
+    assert result.title == "稻香"
+    assert result.artist == "artist"

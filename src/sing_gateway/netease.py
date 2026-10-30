@@ -39,6 +39,42 @@ _LYRIC_CREDIT_RE = re.compile(
     r"^(作词|作曲|编曲|制作人|监制|出品|录音|混音|母带|吉他|贝斯|鼓|键盘|和声|弦乐|词|曲|OP|SP)\s*[:：]",
     re.IGNORECASE,
 )
+_TITLE_NOISE_RE = re.compile(r"[\s\-_·・,，。.、!！?？'\"“”‘’()（）\[\]【】《》]+")
+# Decorations that mark a different arrangement rather than the master. Plain
+# and 唱片版/原版/原唱-labelled hits are the recording the user asked for, so they
+# are deliberately absent here.
+_VARIANT_RE = re.compile(
+    r"深情|治愈|伤感|史诗|史詩|女声|男声|男生|女生|童声|合唱|和声|钢琴|吉他|清唱|哼唱|"
+    r"现场|加速|慢速|抖音|翻唱|伴奏|纯音乐|铃声|片段|串烧|medley|cover|live|remix|dj",
+    re.IGNORECASE,
+)
+
+
+def _normalized_title(value: str) -> str:
+    return _TITLE_NOISE_RE.sub("", value or "").casefold()
+
+
+def title_match_score(query: str, title: str) -> float:
+    """How well *title* answers *query*: 1.0 for an exact title, 0.2 unrelated.
+
+    NetEase ranks unknown cover, remix and live uploads above the original for
+    anonymous searches (稻香 → 稻香(深情版) by an uploader), so the query is
+    matched against the title instead of trusting the result order. A title that
+    only decorates the query stays usable but ranks below a plain-titled upload.
+    """
+    wanted = _normalized_title(query)
+    found = _normalized_title(title)
+    if not wanted or not found:
+        return 0.0
+    if found == wanted:
+        return 1.0
+    if found.startswith(wanted):
+        base = 0.7
+    elif wanted in found:
+        base = 0.4
+    else:
+        base = 0.2
+    return max(0.1, base - 0.2) if _VARIANT_RE.search(found) else base
 
 
 def _proxy() -> str | None:
@@ -61,7 +97,7 @@ def _song_id(url: str) -> str:
 
 
 def search_netease(query: str, limit: int = 3) -> list[SongCandidate]:
-    """Search NetEase and return up to ``limit`` usable candidates."""
+    """Search NetEase and return up to ``limit`` candidates, best match first."""
     query = (query or "").strip()
     if not query:
         return []
@@ -101,6 +137,9 @@ def search_netease(query: str, limit: int = 3) -> list[SongCandidate]:
                 url=f"https://music.163.com/song?id={song_id}",
             )
         )
+    # Best title match first; ``sort`` is stable, so hits NetEase considers
+    # equally relevant keep the order it returned them in.
+    candidates.sort(key=lambda candidate: -title_match_score(query, candidate.title))
     return candidates
 
 

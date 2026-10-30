@@ -61,6 +61,56 @@ def test_search_netease_parses_songs(monkeypatch: MonkeyPatch) -> None:
     assert rows[0].duration_seconds == 250
 
 
+def test_title_match_score_ranks_plain_title_above_variants() -> None:
+    assert netease.title_match_score("稻香", "稻香") == 1.0
+    assert netease.title_match_score("稻香", "《稻香》") == 1.0
+    assert netease.title_match_score("稻香", "稻香 (Live)") < 1.0
+    assert netease.title_match_score("稻香", "晴天") == 0.2
+    assert netease.title_match_score("", "稻香") == 0.0
+
+
+def test_title_match_score_penalizes_re_recordings() -> None:
+    # 深情版 / 女声版 are different arrangements; a plain or 原唱-labelled upload
+    # is likelier to be the master the user asked for.
+    assert netease.title_match_score("晴天", "晴天 (原唱 周杰伦)") > netease.title_match_score(
+        "晴天", "晴天(深情版)"
+    )
+    assert netease.title_match_score("暖暖", "暖暖") > netease.title_match_score(
+        "暖暖", "暖暖（男生版）--Cover梁静茹"
+    )
+
+
+def test_search_netease_ranks_best_match_first(monkeypatch: MonkeyPatch) -> None:
+    payload = {
+        "code": 200,
+        "result": {
+            "songs": [
+                {"id": 1, "name": "稻香(深情版)", "artists": [{"name": "Lucky小爱"}]},
+                {"id": 2, "name": "稻香", "artists": [{"name": "Lie"}]},
+                {"id": 3, "name": "晴天", "artists": [{"name": "Jay"}]},
+            ]
+        },
+    }
+    monkeypatch.setattr(netease.httpx, "Client", lambda **kwargs: _FakeClient(payload))
+    rows = netease.search_netease("稻香", 3)
+    assert [row.url.rsplit("=", 1)[-1] for row in rows] == ["2", "1", "3"]
+
+
+def test_search_netease_keeps_order_for_equal_scores(monkeypatch: MonkeyPatch) -> None:
+    payload = {
+        "code": 200,
+        "result": {
+            "songs": [
+                {"id": 1, "name": "雨爱", "artists": [{"name": "杨丞琳"}]},
+                {"id": 2, "name": "雨爱", "artists": [{"name": "DJ冷冰冰"}]},
+            ]
+        },
+    }
+    monkeypatch.setattr(netease.httpx, "Client", lambda **kwargs: _FakeClient(payload))
+    rows = netease.search_netease("雨爱", 2)
+    assert [row.url.rsplit("=", 1)[-1] for row in rows] == ["1", "2"]
+
+
 def test_download_vip_error(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     monkeypatch.delenv("SING_NCM_API", raising=False)
     payload = {"code": 200, "data": [{"id": 1, "url": None, "code": 404}]}

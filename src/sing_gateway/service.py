@@ -102,7 +102,12 @@ def render_song(url: str, cfg: SingConfig) -> SingResult:
         public_url = str(meta.get("audio_url") or "").strip()
         if public_url and _url_reachable(public_url):
             logger.info("sing cache hit %s", key)
-            return SingResult(public_url, str(meta.get("filename") or "cover.mp3"), True)
+            return SingResult(
+                public_url,
+                str(meta.get("filename") or "cover.mp3"),
+                True,
+                duration_seconds=int(meta.get("duration_seconds") or cfg.duration),
+            )
         logger.info("sing cache entry has no playable url; regenerating %s", key)
         audio.unlink(missing_ok=True)
         audio.with_suffix(".json").unlink(missing_ok=True)
@@ -114,8 +119,10 @@ def render_song(url: str, cfg: SingConfig) -> SingResult:
         else:
             source, title, total = bilibili.download_audio(url, workdir)
         start = cfg.start
+        clip_seconds = cfg.duration
         if total > 0:
             start = min(start, max(0, int(total) - cfg.duration - 1))
+            clip_seconds = min(cfg.duration, max(0, int(total) - start)) or cfg.duration
         clip = workdir / "clip.mp3"
         media.trim_audio(source, clip, start, cfg.duration)
         audio_url = replicate.upload_file(base_url, token, clip)
@@ -127,24 +134,29 @@ def render_song(url: str, cfg: SingConfig) -> SingResult:
                 root,
                 key,
                 generated,
-                {"filename": filename, "audio_url": output_url},
+                {
+                    "filename": filename,
+                    "audio_url": output_url,
+                    "duration_seconds": clip_seconds,
+                },
                 cfg.cache_max_entries,
             )
         except Exception:
             logger.warning("sing cache store failed", exc_info=True)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
-    return SingResult(output_url, filename, cached=False)
+    return SingResult(output_url, filename, cached=False, duration_seconds=clip_seconds)
 
 
 def _pick_candidate(song: str, cfg: SingConfig) -> SongCandidate:
-    """Pick a search hit whose requested window actually contains singing.
+    """Pick the best-matching search hit whose window actually contains singing.
 
     Covers are generated from a fixed ``start`` window. NetEase VIP tracks
     resolve to a short preview clip starting at 0s, and long intros or
     instrumental sections leave the window without vocals — the model then
-    turns separation bleed into noise. Walk the hits: full tracks win over
-    previews, and any hit whose window has no lyric line is skipped.
+    turns separation bleed into noise. Walk the hits in match order (the source
+    ranks them): full tracks win over previews, and any hit whose window has no
+    lyric line is skipped.
     """
     candidates = search_songs(song, 5 if cfg.music_source == "netease" else 1, cfg.music_source)
     if not candidates:
@@ -184,5 +196,7 @@ def _pick_candidate(song: str, cfg: SingConfig) -> SongCandidate:
 
 
 def render_song_by_query(song: str, cfg: SingConfig) -> SingResult:
-    """Search for *song* and generate a cover from the first usable result."""
-    return render_song(_pick_candidate(song, cfg).url, cfg)
+    """Search for *song* and generate a cover from the best-matching result."""
+    candidate = _pick_candidate(song, cfg)
+    # Carry the picked title/artist so clients can show which version was used.
+    return replace(render_song(candidate.url, cfg), title=candidate.title, artist=candidate.artist)

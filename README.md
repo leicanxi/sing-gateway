@@ -76,6 +76,8 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili` or `netease` (payload `"source"` overrides per request) |
 | `SING_CACHE_TTL_HOURS` | `168` | Disk cache TTL |
 | `SING_CACHE_MAX_ENTRIES` | `50` | Disk cache entries |
+| `SING_MAX_CONCURRENCY` | `2` | Concurrent background renders; extra jobs queue |
+| `SING_JOB_TTL_SECONDS` | `3600` | Finished job rows kept for status polling |
 | `SING_VOICES_FILE` | `~/.octop/sing-voices.json` | Admin-managed voice whitelist |
 | `SING_VOICES_CATALOG_FILE` | `~/.octop/sing-voices-catalog.json` | Scraped public catalog (see [Voice catalog](#voice-catalog)) |
 | `SING_VOICE_PLAZA_URL` | `https://voice-models.flowbee.top` | Voice plaza link returned by the guide endpoints |
@@ -219,6 +221,84 @@ sing-catalog-scrape --limit 200
 
 The gateway returns a standard chat completion whose assistant content is a
 JSON audio block. `usage` is zero because billing is per-call.
+
+### Async job API
+
+Long generations can be submitted as a background job instead of holding one
+HTTP request open. The same endpoint is served on the gateway root and is the
+contract every client plugin (AstrBot, Octop, DSH) uses:
+
+```http
+POST /sing/v1/jobs
+Authorization: Bearer <SING_GATEWAY_TOKEN>
+{"song": "雨爱", "voice": "keine", "start": 60, "duration": 60}
+```
+
+```json
+{"id": "job_...", "status": "queued", "stage": "queued", ...}
+```
+
+```http
+GET /sing/v1/jobs/job_...
+```
+
+```json
+{
+  "id": "job_...",
+  "status": "succeeded",
+  "stage": "done",
+  "audio_url": "https://cdn/cover.mp3",
+  "filename": "雨爱.mp3",
+  "title": "雨爱",
+  "artist": "杨丞琳",
+  "duration_seconds": 60,
+  "cached": true
+}
+```
+
+- Statuses: `queued`, `running`, `succeeded`, `failed` (`failed` carries
+  `error`). Clients poll every few seconds; `SING_JOB_TTL_SECONDS` keeps
+  finished rows around for late polls.
+- Identical submissions share one job (same song/url + voice + start/duration +
+  pitch mode), so double-clicks and retries do not re-render.
+- Only `SING_MAX_CONCURRENCY` renders run at once; the rest wait in `queued`.
+- `duration_seconds` is the actual clip length (a VIP preview can be shorter
+  than the requested duration) and `cached` marks a disk-cache hit. Both let a
+  billing layer charge per second and price cache hits differently.
+- `POST /v1/sing/jobs` is an alias, so clients that already speak `/v1` can use
+  it without changing their base URL.
+- Job state is in-process: run a single gateway worker (the systemd unit does).
+  A gateway restart loses finished rows but not the disk cache, so a client
+  retry usually hits the cache and returns in about a second.
+
+The synchronous `POST /v1/chat/completions` path stays for old clients; it
+returns the same `duration_seconds` / `cached` fields in the audio block.
+
+### Per-second billing (`sing` task plugin)
+
+The `sing` task plugin in the `flowbee-api` fork wraps this job API so new-api
+tracks the async task and settles the bill:
+
+1. Build/deploy a new-api image that includes `plugins/tasks/sing/plugin.js`.
+2. Create a **Task Plugin** channel:
+   - Base URL: `http://<host>:9001` (the gateway root, without `/v1`)
+   - Key: the same value as `SING_GATEWAY_TOKEN`
+   - Bind plugin `sing`, add model `sing-song`
+3. Keep the ordinary channel above for the synchronous `chat/completions`
+   path. Both providers may share `sing-song`; price them separately.
+4. Invoice the task provider per second. Task expressions return USD directly
+   (`billing_setting.plugin_billing_expr`, key `sing::sing-song`):
+   - flat: `tier("base", u("seconds") * 0.0032)` → $0.0032/s
+   - cache discount:
+     `u("cached") ? u("seconds") * 0.0005 : u("seconds") * 0.0032`
+5. Clients submit `POST /sing/v1/jobs` with `"model": "sing-song"` and poll
+   `GET /sing/v1/jobs/{id}`. AstrBot does this automatically with
+   `transport=auto` (falls back to the sync endpoint on old gateways).
+
+new-api reserves the requested duration at submit (`extractUsage`) and settles
+on the gateway's actual `duration_seconds` and `cached` at completion
+(`extractUsageOnComplete`). A failed render refunds; a cache hit can be
+discounted or made free by the expression.
 
 ## Voice catalog
 

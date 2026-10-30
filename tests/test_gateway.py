@@ -7,12 +7,26 @@ import json
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
+from sing_gateway.config import SingResult
 from sing_gateway.server import sing
 
 
 def _client() -> TestClient:
     # https base URL so Secure cookies are sent by the test client
     return TestClient(sing.app, base_url="https://testserver")
+
+
+def test_audio_block_names_the_picked_version() -> None:
+    block = SingResult("https://cdn/a.mp3", "a.mp3", title="稻香", artist="周杰伦").as_block()
+    assert block["type"] == "audio"
+    assert block["title"] == "稻香"
+    assert block["artist"] == "周杰伦"
+
+
+def test_audio_block_omits_unknown_song() -> None:
+    block = SingResult("https://cdn/a.mp3", "a.mp3").as_block()
+    assert "title" not in block
+    assert "artist" not in block
 
 
 def test_health() -> None:

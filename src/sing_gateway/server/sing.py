@@ -1,12 +1,14 @@
 """OpenAI-compatible gateway for the ``sing-song`` new-api model.
 
-Run it next to Octop and point a new-api custom channel at ``/v1``:
+Run it as its own service and point a new-api custom channel at ``/v1``:
 
     SING_GATEWAY_TOKEN=... REPLICATE_API_TOKEN=... \\
         sing-gateway --host 127.0.0.1 --port 9001
 
-new-api bills the user per call; this gateway only performs the generation and
-returns the standard audio block as the assistant message content.
+Clients either call the synchronous ``POST /v1/chat/completions`` or submit a
+background job with ``POST /sing/v1/jobs`` and poll ``GET /sing/v1/jobs/{id}``;
+the job form keeps multi-minute generations out of every client's HTTP timeout
+and exposes ``duration_seconds`` / ``cached`` for per-second billing.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ from sing_gateway import (
     resolve_voice,
     search_songs,
 )
+from sing_gateway.jobs import JobManager
 from sing_gateway.server.sso import (
     DEFAULT_NEXT,
     check_origin,
@@ -108,6 +111,18 @@ class ChatCompletionRequest(BaseModel):
     model: str = _DEFAULT_MODEL
     messages: list[ChatMessage] = Field(default_factory=list)
     stream: bool = False
+
+
+class JobRequest(BaseModel):
+    model: str = _DEFAULT_MODEL
+    song: str = ""
+    url: str = ""
+    voice: str = ""
+    start: int | None = None
+    duration: int | None = None
+    pitch: int | None = None
+    pitch_mode: str | None = None
+    source: str = ""
 
 
 def _gateway_token() -> str:
@@ -228,6 +243,18 @@ def _render(payload: dict[str, Any]) -> dict[str, Any]:
     return result.as_block()
 
 
+def _job_payload(body: JobRequest) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in body.model_dump().items()
+        if key != "model" and value not in (None, "")
+    }
+
+
+# The lambda resolves ``_render`` at call time so tests can monkeypatch it.
+_JOBS = JobManager(lambda payload: _render(payload))
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -342,6 +369,31 @@ async def chat_completions(body: ChatCompletionRequest) -> dict[str, Any]:
         ],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
+
+
+@app.post("/v1/sing/jobs", status_code=202, dependencies=[Depends(_require_token)])
+@app.post("/sing/v1/jobs", status_code=202, dependencies=[Depends(_require_token)])
+async def submit_sing_job(body: JobRequest) -> dict[str, Any]:
+    payload = _job_payload(body)
+    if not payload.get("url") and not payload.get("song"):
+        raise HTTPException(status_code=400, detail="url or song is required")
+    try:
+        # Validate the voice and static config now; the long work runs in a job.
+        _config(payload)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _JOBS.view(_JOBS.submit(payload))
+
+
+@app.get("/v1/sing/jobs/{job_id}", dependencies=[Depends(_require_token)])
+@app.get("/sing/v1/jobs/{job_id}", dependencies=[Depends(_require_token)])
+async def get_sing_job(job_id: str) -> dict[str, Any]:
+    job = _JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _JOBS.view(job)
 
 
 UPLOAD_DIR_ENV = "SING_UPLOAD_DIR"
