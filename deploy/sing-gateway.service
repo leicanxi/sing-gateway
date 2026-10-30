@@ -1,0 +1,16 @@
+[Unit]
+Description=sing-gateway (singing gateway for new-api / FlowBee)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sing-gateway
+EnvironmentFile=/etc/sing-gateway.env
+ExecStart=/opt/sing-gateway/.venv/bin/sing-gateway
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
