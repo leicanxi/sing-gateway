@@ -39,7 +39,7 @@ def _normalized(cfg: SingConfig) -> SingConfig:
     return replace(
         cfg,
         start=max(0, min(3600, int(cfg.start))),
-        duration=max(5, min(60, int(cfg.duration))),
+        duration=max(5, min(120, int(cfg.duration))),
         pitch=max(-24, min(24, int(cfg.pitch))),
         pitch_mode=cfg.pitch_mode if cfg.pitch_mode in PITCH_MODES else "no-change",
         music_source=cfg.music_source if cfg.music_source in MUSIC_SOURCES else "bilibili",

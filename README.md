@@ -72,7 +72,7 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_REPLICATE_BASE_URL` | `https://api.replicate.com/v1` | Replicate API base |
 | `SING_PITCH` | `2` | Default semitone shift |
 | `SING_START` | `60` | Default clip start (seconds) |
-| `SING_DURATION` | `25` | Default clip length (5–60) |
+| `SING_DURATION` | `25` | Default clip length (5–120) |
 | `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili` or `netease` (payload `"source"` overrides per request) |
 | `SING_CACHE_TTL_HOURS` | `168` | Disk cache TTL |
 | `SING_CACHE_MAX_ENTRIES` | `50` | Disk cache entries |
@@ -359,17 +359,22 @@ created them and each user can manage (list/delete) their own from the plaza.
 
 ### Login (FlowBee SSO)
 
-The gateway never sees passwords. FlowBee (new-api) signs a 5-minute HS256
-identity ticket for its logged-in user at `/api/user/octop_sso` (shared secret
-`OCTOP_SSO_SECRET`, callback `OCTOP_SSO_CALLBACK`); the gateway verifies it with
-the same secret (`SING_SSO_SECRET`), then mints its own session JWT.
+The gateway never sees passwords. FlowBee (new-api) exposes
+`GET /api/user/sso/authorize?client=<id>&state=<opaque>`: a logged-in dashboard
+user is 302'd straight to the client's registered callback with a **60-second**
+HS256 ticket whose `aud` is the client id; anonymous visitors are sent to the
+sign-in page with a redirect back. The gateway verifies the ticket with that
+client's secret (`SING_SSO_SECRET`, `aud` must equal `SING_SSO_CLIENT_ID`) and
+mints its own session JWT. The legacy `/sso/octop` relay + `/api/user/octop_sso`
+pair still works for migration.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `SING_JWT_SECRET` | — | Session JWT signing secret; empty disables login **and** uploads (fail closed) |
 | `SING_JWT_TTL_HOURS` | `168` | Session lifetime |
-| `SING_SSO_SECRET` | — | Must equal FlowBee's `OCTOP_SSO_SECRET` |
-| `SING_SSO_URL` | `https://flowbee.top/sso/octop` | FlowBee SSO relay page |
+| `SING_SSO_CLIENT_ID` | `sing` | Relying-party id registered in FlowBee's SSO client table (also the expected `aud`) |
+| `SING_SSO_SECRET` | — | That client's secret in FlowBee's `SSO_CLIENTS` |
+| `SING_SSO_URL` | `https://flowbee.top/api/user/sso/authorize` | FlowBee's SSO authorize endpoint (legacy relay page still works) |
 | `SING_PLAZA_BASE` | `https://voice-models.flowbee.top` | Plaza origin used for post-login redirects |
 
 Set `OCTOP_SSO_SECRET` / `OCTOP_SSO_CALLBACK=https://<plaza-host>/v1/auth/callback`

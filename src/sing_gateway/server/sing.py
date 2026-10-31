@@ -52,6 +52,7 @@ from sing_gateway.server.sso import (
     check_origin,
     clear_session_cookie,
     clear_sso_cookie,
+    client_id,
     issue_session,
     jwt_secret,
     new_state,
@@ -214,9 +215,9 @@ def _config(payload: dict[str, Any]) -> SingConfig:
         ),
         duration=_as_int(
             payload.get("duration"),
-            _as_int(os.environ.get("SING_DURATION"), 25, minimum=5, maximum=60),
+            _as_int(os.environ.get("SING_DURATION"), 25, minimum=5, maximum=120),
             minimum=5,
-            maximum=60,
+            maximum=120,
         ),
         music_source=str(
             payload.get("source") or os.environ.get("SING_MUSIC_SOURCE", "") or "bilibili"
@@ -740,7 +741,8 @@ def auth_login(next_path: str = Query(DEFAULT_NEXT, alias="next")) -> RedirectRe
     if not sso_secret() or not jwt_secret():
         raise HTTPException(status_code=503, detail="登录服务未配置")
     state = new_state()
-    target = f"{sso_url()}?state={urllib.parse.quote(state)}"
+    query = urllib.parse.urlencode({"client": client_id(), "state": state})
+    target = f"{sso_url()}?{query}"
     response = RedirectResponse(target, status_code=302)
     set_sso_cookie(response, state, normalize_next(next_path))
     return response

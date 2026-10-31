@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
@@ -240,6 +241,8 @@ def _submission_env(monkeypatch: MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("SING_SSO_SECRET", "test-sso-secret")
     monkeypatch.setenv("SING_JWT_TTL_HOURS", "24")
     monkeypatch.setenv("SING_PLAZA_BASE", "https://plaza.example")
+    monkeypatch.setenv("SING_SSO_CLIENT_ID", "sing")
+    monkeypatch.delenv("SING_SSO_URL", raising=False)
     monkeypatch.delenv("SING_REVIEW_BASE_URL", raising=False)
     monkeypatch.delenv("SING_REVIEW_API_KEY", raising=False)
     sing._recent_submissions.clear()
@@ -450,8 +453,9 @@ def test_auth_login_redirects_to_sso(monkeypatch: MonkeyPatch, tmp_path) -> None
     response = _client().get("/v1/auth/login?next=/upload.html", follow_redirects=False)
     assert response.status_code == 302
     location = response.headers["location"]
-    assert location.startswith("https://flowbee.top/sso/octop?state=")
-    state = location.split("state=", 1)[1]
+    assert location.startswith("https://flowbee.top/api/user/sso/authorize?")
+    assert "client=sing" in location
+    state = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)["state"][0]
     cookie = response.cookies.get("sing_sso")
     assert cookie == f"{state}.upload"
 
@@ -714,3 +718,52 @@ def test_models_endpoint_lists_search_model(monkeypatch: MonkeyPatch) -> None:
     response = _client().get("/v1/models", headers={"Authorization": "Bearer secret"})
     ids = [item["id"] for item in response.json()["data"]]
     assert ids == ["sing-song", "sing-voices", "sing-search"]
+
+
+def test_auth_callback_rejects_wrong_audience(monkeypatch: MonkeyPatch, tmp_path) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    import time
+
+    import jwt as pyjwt
+
+    client = _client()
+    login = client.get("/v1/auth/login?next=/upload.html", follow_redirects=False)
+    state = urllib.parse.parse_qs(urllib.parse.urlparse(login.headers["location"]).query)["state"][
+        0
+    ]
+    code = pyjwt.encode(
+        {
+            "sub": "7",
+            "username": "alice",
+            "aud": "beewith",
+            "exp": int(time.time()) + 300,
+        },
+        "test-sso-secret",
+        algorithm="HS256",
+    )
+    callback = client.get(f"/v1/auth/callback?code={code}&state={state}", follow_redirects=False)
+    assert callback.status_code == 302
+    assert "login=failed" in callback.headers["location"]
+
+
+def test_auth_callback_accepts_legacy_ticket_without_audience(
+    monkeypatch: MonkeyPatch, tmp_path
+) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    import time
+
+    import jwt as pyjwt
+
+    client = _client()
+    login = client.get("/v1/auth/login?next=/upload.html", follow_redirects=False)
+    state = urllib.parse.parse_qs(urllib.parse.urlparse(login.headers["location"]).query)["state"][
+        0
+    ]
+    code = pyjwt.encode(
+        {"sub": "7", "username": "alice", "exp": int(time.time()) + 300},
+        "test-sso-secret",
+        algorithm="HS256",
+    )
+    callback = client.get(f"/v1/auth/callback?code={code}&state={state}", follow_redirects=False)
+    assert callback.status_code == 302
+    assert callback.headers["location"] == "https://plaza.example/upload.html"

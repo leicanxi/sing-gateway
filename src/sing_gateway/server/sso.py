@@ -60,7 +60,12 @@ def sso_secret() -> str:
 
 
 def sso_url() -> str:
-    return _env("SING_SSO_URL", "https://flowbee.top/sso/octop")
+    return _env("SING_SSO_URL", "https://flowbee.top/api/user/sso/authorize")
+
+
+def client_id() -> str:
+    """Relying-party id registered in FlowBee's SSO client table."""
+    return _env("SING_SSO_CLIENT_ID", "sing")
 
 
 def plaza_base() -> str:
@@ -149,13 +154,21 @@ def verify_sso_ticket(code: str) -> Identity:
             code,
             secret,
             algorithms=["HS256"],
-            options={"require": ["exp", "sub"]},
+            # aud is validated below so tickets minted before the client-id
+            # rollout (legacy relay page, no aud) keep working during migration.
+            options={"require": ["exp", "sub"], "verify_aud": False},
             leeway=CLOCK_SKEW_SECONDS,
         )
     except jwt.ExpiredSignatureError as exc:
         raise HTTPException(status_code=401, detail="登录凭据已过期，请重试") from exc
     except jwt.InvalidTokenError as exc:
         raise HTTPException(status_code=401, detail="登录凭据无效") from exc
+    audience = payload.get("aud")
+    if audience is not None:
+        expected = client_id()
+        presented = audience if isinstance(audience, list) else [audience]
+        if expected not in [str(item) for item in presented]:
+            raise HTTPException(status_code=401, detail="登录凭据受众不匹配")
     return _identity_from_payload(payload)
 
 
