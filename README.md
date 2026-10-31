@@ -359,14 +359,15 @@ created them and each user can manage (list/delete) their own from the plaza.
 
 ### Login (FlowBee SSO)
 
-The gateway never sees passwords. FlowBee (new-api) exposes
-`GET /api/user/sso/authorize?client=<id>&state=<opaque>`: a logged-in dashboard
-user is 302'd straight to the client's registered callback with a **60-second**
-HS256 ticket whose `aud` is the client id; anonymous visitors are sent to the
-sign-in page with a redirect back. The gateway verifies the ticket with that
-client's secret (`SING_SSO_SECRET`, `aud` must equal `SING_SSO_CLIENT_ID`) and
-mints its own session JWT. The legacy `/sso/octop` relay + `/api/user/octop_sso`
-pair still works for migration.
+The gateway never sees passwords. FlowBee (new-api) exposes a generic relay
+page `GET /sso/<client>?state=<opaque>`: an anonymous visitor is sent to the
+sign-in page with a redirect back, and a logged-in user's browser is handed a
+**60-second** HS256 ticket whose `aud` is the client id, then redirected to the
+callback registered for that client (`SSO_CLIENTS`).
+
+The gateway verifies the ticket with that client's secret (`SING_SSO_SECRET`,
+`aud` must equal `SING_SSO_CLIENT_ID`) and mints its own session JWT. The legacy
+`/sso/octop` relay + `/api/user/octop_sso` pair still works for migration.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -374,7 +375,7 @@ pair still works for migration.
 | `SING_JWT_TTL_HOURS` | `168` | Session lifetime |
 | `SING_SSO_CLIENT_ID` | `sing` | Relying-party id registered in FlowBee's SSO client table (also the expected `aud`) |
 | `SING_SSO_SECRET` | — | That client's secret in FlowBee's `SSO_CLIENTS` |
-| `SING_SSO_URL` | `https://flowbee.top/api/user/sso/authorize` | FlowBee's SSO authorize endpoint (legacy relay page still works) |
+| `SING_SSO_URL` | `https://flowbee.top/sso/sing` | FlowBee entry for this relying party (the relay page path carries the client id) |
 | `SING_PLAZA_BASE` | `https://voice-models.flowbee.top` | Plaza origin used for post-login redirects |
 
 Set `OCTOP_SSO_SECRET` / `OCTOP_SSO_CALLBACK=https://<plaza-host>/v1/auth/callback`

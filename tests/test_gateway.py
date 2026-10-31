@@ -453,8 +453,7 @@ def test_auth_login_redirects_to_sso(monkeypatch: MonkeyPatch, tmp_path) -> None
     response = _client().get("/v1/auth/login?next=/upload.html", follow_redirects=False)
     assert response.status_code == 302
     location = response.headers["location"]
-    assert location.startswith("https://flowbee.top/api/user/sso/authorize?")
-    assert "client=sing" in location
+    assert location.startswith("https://flowbee.top/sso/sing?")
     state = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)["state"][0]
     cookie = response.cookies.get("sing_sso")
     assert cookie == f"{state}.upload"

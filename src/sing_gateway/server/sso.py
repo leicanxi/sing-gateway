@@ -60,7 +60,8 @@ def sso_secret() -> str:
 
 
 def sso_url() -> str:
-    return _env("SING_SSO_URL", "https://flowbee.top/api/user/sso/authorize")
+    """FlowBee entry point for this relying party (relay page; includes the client)."""
+    return _env("SING_SSO_URL", "https://flowbee.top/sso/sing")
 
 
 def client_id() -> str:
