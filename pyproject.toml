@@ -7,7 +7,7 @@ name = "sing-gateway"
 version = "0.1.0"
 description = "Self-hosted singing gateway: song search, clip extraction, RVC covers via Replicate, voice catalog, plaza submissions and FlowBee SSO login"
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.110",

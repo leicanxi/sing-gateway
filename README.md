@@ -37,8 +37,6 @@ run it after a scrape).
 
 ## Run the gateway
 
-## Run the gateway
-
 Install the optional runtime dependencies on the gateway host (the plugin's
 install normally does this already):
 
@@ -486,6 +484,18 @@ or plain text (`雨爱`). Plain text is treated as the song name.
   cost is $0.016–0.054 and the cache hit cost is near zero.
 
 
+## Voice plaza web (static site)
+
+The plaza frontend is a plain static site in
+[`web/voice-plaza/`](web/voice-plaza/) — catalog browser, self-service upload
+and account management pages, no build step. It calls the gateway same-origin
+(`/v1/voices` guide, `/v1/voice-requests*`, `/v1/auth/*`); deploy it to any
+static webroot fronting the gateway (the FlowBee host uses Caddy at
+`/opt/caddy/data/voice-models/`). `catalog.json` is generated on the gateway
+host by `sing-catalog-scrape` and is not committed.
+
 ## License
 
-MIT
+GNU AGPL-3.0-or-later (see [LICENSE](LICENSE)). Versions up to 0.1.0 were
+released under MIT; later versions are AGPL so that hosted deployments of
+modified versions share their source.
