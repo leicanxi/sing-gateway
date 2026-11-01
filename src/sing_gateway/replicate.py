@@ -9,7 +9,13 @@ from typing import Any
 
 import httpx
 
-from sing_gateway.config import PITCH_MODES, ClientSongError, SingConfig
+from sing_gateway.config import (
+    PITCH_MODES,
+    VOLUME_MAX,
+    VOLUME_MIN,
+    ClientSongError,
+    SingConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +77,8 @@ def predict_cover(base_url: str, token: str, audio_url: str, cfg: SingConfig) ->
         "rms_mix_rate": _clamp_float(cfg.rms_mix_rate, 0.0, 1.0),
         "protect": _clamp_float(cfg.protect, 0.0, 0.5),
         "main_vocals_volume_change": 0,
-        "backup_vocals_volume_change": -60,
-        "instrumental_volume_change": -60,
+        "backup_vocals_volume_change": _clamp_int(cfg.backup_vocals_volume, VOLUME_MIN, VOLUME_MAX),
+        "instrumental_volume_change": _clamp_int(cfg.instrumental_volume, VOLUME_MIN, VOLUME_MAX),
         "reverb_size": 0.15,
         "reverb_wetness": 0.0,
         "reverb_dryness": 1.0,

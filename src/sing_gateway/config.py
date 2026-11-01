@@ -11,6 +11,11 @@ DEFAULT_REPLICATE_BASE = "https://api.replicate.com/v1"
 DEFAULT_MODEL = "zsxkib/realistic-voice-cloning"
 PITCH_MODES = frozenset({"no-change", "male-to-female", "female-to-male"})
 MUSIC_SOURCES = frozenset({"bilibili", "netease"})
+# Mixing gains are dB offsets the cover model applies when remixing converted
+# vocals with the separated stems: 0 keeps a stem at source loudness, -60 mutes
+# it. Positive gains risk clipping and are not exposed.
+VOLUME_MIN = -60
+VOLUME_MAX = 0
 
 
 class ClientSongError(RuntimeError):
@@ -53,6 +58,8 @@ class SingConfig:
     filter_radius: int = 3
     rms_mix_rate: float = 0.25
     protect: float = 0.33
+    instrumental_volume: int = VOLUME_MIN
+    backup_vocals_volume: int = VOLUME_MIN
     prediction_timeout: float = 600.0
     cache_ttl_hours: float = 168.0
     cache_max_entries: int = 50

@@ -3,17 +3,29 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from pytest import MonkeyPatch
 
-from sing_gateway import service
+from sing_gateway import cache, service
 from sing_gateway.config import SingConfig
 
 
 def _cfg(tmp_path: Path) -> SingConfig:
     return SingConfig(cache_root=tmp_path, replicate_token="r8_test")
+
+
+def test_cache_key_separates_mixing_variants() -> None:
+    base = SingConfig()
+    url, start, duration = "https://music.163.com/song?id=1", 60, 25
+    key = cache.cache_key(url, start, duration, base)
+    # Different mixing gains are different audio: they must not serve each
+    # other's cached entries.
+    assert key != cache.cache_key(url, start, duration, replace(base, instrumental_volume=0))
+    assert key != cache.cache_key(url, start, duration, replace(base, backup_vocals_volume=0))
+    assert key == cache.cache_key(url, start, duration, SingConfig())
 
 
 def _patch_full_render(monkeypatch: MonkeyPatch) -> None:

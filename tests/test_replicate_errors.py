@@ -76,3 +76,63 @@ def test_other_prediction_failures_stay_runtime_error(
         )
     assert not isinstance(excinfo.value, ClientSongError)
     assert "cuDNN" in str(excinfo.value)
+
+
+def test_payload_carries_configured_mixing_volumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _CaptureClient(_FakeClient):
+        def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+            if isinstance(kwargs.get("json"), dict):
+                captured.update(kwargs["json"])
+            return super().post(url, **kwargs)
+
+    monkeypatch.setattr(
+        replicate.httpx,
+        "Client",
+        lambda **kwargs: _CaptureClient({"status": "succeeded", "output": ["https://x/out.mp3"]}),
+    )
+    monkeypatch.setattr(replicate.time, "sleep", lambda seconds: None)
+    replicate.predict_cover(
+        "https://api.replicate.com/v1",
+        "r8_test",
+        "https://x/song.mp3",
+        SingConfig(
+            replicate_token="r8_test",
+            model_version="v-test",
+            instrumental_volume=0,
+            backup_vocals_volume=-6,
+        ),
+    )
+    payload_input = captured["input"]
+    assert payload_input["instrumental_volume_change"] == 0
+    assert payload_input["backup_vocals_volume_change"] == -6
+    assert payload_input["main_vocals_volume_change"] == 0
+
+
+def test_payload_mutes_stems_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class _CaptureClient(_FakeClient):
+        def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+            if isinstance(kwargs.get("json"), dict):
+                captured.update(kwargs["json"])
+            return super().post(url, **kwargs)
+
+    monkeypatch.setattr(
+        replicate.httpx,
+        "Client",
+        lambda **kwargs: _CaptureClient({"status": "succeeded", "output": ["https://x/out.mp3"]}),
+    )
+    monkeypatch.setattr(replicate.time, "sleep", lambda seconds: None)
+    replicate.predict_cover(
+        "https://api.replicate.com/v1",
+        "r8_test",
+        "https://x/song.mp3",
+        SingConfig(replicate_token="r8_test", model_version="v-test"),
+    )
+    payload_input = captured["input"]
+    assert payload_input["instrumental_volume_change"] == -60
+    assert payload_input["backup_vocals_volume_change"] == -60

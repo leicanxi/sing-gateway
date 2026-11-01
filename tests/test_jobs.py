@@ -81,6 +81,12 @@ def test_identical_submissions_share_one_job() -> None:
     assert first["id"] == second["id"]
 
 
+def test_mixing_variants_do_not_share_one_job() -> None:
+    plain = _submit({"song": "晴天", "duration": 25})
+    accompaniment = _submit({"song": "晴天", "duration": 25, "instrumental_volume": 0})
+    assert plain["id"] != accompaniment["id"]
+
+
 def test_failure_is_reported(monkeypatch: MonkeyPatch) -> None:
     def fail_render(payload: dict) -> dict:
         raise ClientSongError("no song found for '不存在的歌'")

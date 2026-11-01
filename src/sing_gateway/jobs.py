@@ -20,7 +20,18 @@ from typing import Any
 JOB_TTL_SECONDS = float(os.environ.get("SING_JOB_TTL_SECONDS", "3600"))
 MAX_CONCURRENCY = max(1, int(os.environ.get("SING_MAX_CONCURRENCY", "2")))
 
-_DEDUPE_FIELDS = ("song", "url", "voice", "start", "duration", "pitch", "pitch_mode", "source")
+_DEDUPE_FIELDS = (
+    "song",
+    "url",
+    "voice",
+    "start",
+    "duration",
+    "pitch",
+    "pitch_mode",
+    "source",
+    "instrumental_volume",
+    "backup_vocals_volume",
+)
 
 
 def _dedupe_key(payload: dict[str, Any]) -> str:

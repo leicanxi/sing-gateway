@@ -46,6 +46,7 @@ from sing_gateway import (
     resolve_voice,
     search_songs,
 )
+from sing_gateway.config import VOLUME_MAX, VOLUME_MIN
 from sing_gateway.jobs import JobManager
 from sing_gateway.server.sso import (
     DEFAULT_NEXT,
@@ -123,6 +124,12 @@ class JobRequest(BaseModel):
     pitch: int | None = None
     pitch_mode: str | None = None
     source: str = ""
+    instrumental_volume: int | None = Field(
+        default=None, description="Instrumental gain in dB, -60 (muted) to 0"
+    )
+    backup_vocals_volume: int | None = Field(
+        default=None, description="Backup-vocal gain in dB, -60 (muted) to 0"
+    )
 
 
 def _gateway_token() -> str:
@@ -217,6 +224,28 @@ def _config(payload: dict[str, Any]) -> SingConfig:
             _as_int(os.environ.get("SING_DURATION"), 25, minimum=5, maximum=120),
             minimum=5,
             maximum=120,
+        ),
+        instrumental_volume=_as_int(
+            payload.get("instrumental_volume"),
+            _as_int(
+                os.environ.get("SING_INSTRUMENTAL_VOLUME"),
+                VOLUME_MIN,
+                minimum=VOLUME_MIN,
+                maximum=VOLUME_MAX,
+            ),
+            minimum=VOLUME_MIN,
+            maximum=VOLUME_MAX,
+        ),
+        backup_vocals_volume=_as_int(
+            payload.get("backup_vocals_volume"),
+            _as_int(
+                os.environ.get("SING_BACKUP_VOCALS_VOLUME"),
+                VOLUME_MIN,
+                minimum=VOLUME_MIN,
+                maximum=VOLUME_MAX,
+            ),
+            minimum=VOLUME_MIN,
+            maximum=VOLUME_MAX,
         ),
         music_source=str(
             payload.get("source") or os.environ.get("SING_MUSIC_SOURCE", "") or "bilibili"

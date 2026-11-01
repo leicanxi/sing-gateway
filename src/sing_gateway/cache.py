@@ -22,7 +22,7 @@ def cache_root(cfg: SingConfig) -> Path:
 
 def cache_key(url: str, start: int, duration: int, cfg: SingConfig) -> str:
     payload = {
-        "v": 1,
+        "v": 2,
         "url": url,
         "start": start,
         "duration": duration,
@@ -31,6 +31,10 @@ def cache_key(url: str, start: int, duration: int, cfg: SingConfig) -> str:
         "voice": cfg.voice_model_url or DEFAULT_VOICE_URL,
         "model": cfg.model or DEFAULT_MODEL,
         "version": cfg.model_version or "latest",
+        # Mixing variants produce different audio: keep them in separate entries
+        # instead of serving a vocals-only hit for an accompaniment request.
+        "instrumental_volume": cfg.instrumental_volume,
+        "backup_vocals_volume": cfg.backup_vocals_volume,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:32]

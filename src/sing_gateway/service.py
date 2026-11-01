@@ -15,6 +15,8 @@ from sing_gateway import bilibili, cache, media, netease, replicate
 from sing_gateway.config import (
     MUSIC_SOURCES,
     PITCH_MODES,
+    VOLUME_MAX,
+    VOLUME_MIN,
     ClientSongError,
     SingConfig,
     SingResult,
@@ -47,6 +49,8 @@ def _normalized(cfg: SingConfig) -> SingConfig:
         filter_radius=max(0, min(7, int(cfg.filter_radius))),
         rms_mix_rate=max(0.0, min(1.0, float(cfg.rms_mix_rate))),
         protect=max(0.0, min(0.5, float(cfg.protect))),
+        instrumental_volume=max(VOLUME_MIN, min(VOLUME_MAX, int(cfg.instrumental_volume))),
+        backup_vocals_volume=max(VOLUME_MIN, min(VOLUME_MAX, int(cfg.backup_vocals_volume))),
         prediction_timeout=max(30.0, float(cfg.prediction_timeout)),
         cache_ttl_hours=max(0.0, float(cfg.cache_ttl_hours)),
         cache_max_entries=max(0, min(500, int(cfg.cache_max_entries))),

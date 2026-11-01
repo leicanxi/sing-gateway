@@ -215,6 +215,32 @@ def test_music_source_env_and_payload(monkeypatch: MonkeyPatch) -> None:
     assert sing._config({}).music_source == "bilibili"
 
 
+def test_mixing_volume_env_payload_and_clamp(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("SING_INSTRUMENTAL_VOLUME", "0")
+    monkeypatch.setenv("SING_BACKUP_VOCALS_VOLUME", "-3")
+    assert sing._config({}).instrumental_volume == 0
+    assert sing._config({}).backup_vocals_volume == -3
+    assert sing._config({"instrumental_volume": -6}).instrumental_volume == -6
+    monkeypatch.delenv("SING_INSTRUMENTAL_VOLUME")
+    monkeypatch.delenv("SING_BACKUP_VOCALS_VOLUME")
+    assert sing._config({}).instrumental_volume == -60
+    assert sing._config({}).backup_vocals_volume == -60
+    # Out-of-range values clamp instead of failing: positive gains would boost
+    # and deepen negatives just mute further.
+    assert sing._config({"instrumental_volume": "5"}).instrumental_volume == 0
+    assert sing._config({"instrumental_volume": "-99"}).instrumental_volume == -60
+
+
+def test_job_request_forwards_mixing_volumes() -> None:
+    body = sing.JobRequest(song="晴天", instrumental_volume=0, backup_vocals_volume=-6)
+    payload = sing._job_payload(body)
+    assert payload["instrumental_volume"] == 0
+    assert payload["backup_vocals_volume"] == -6
+    omitted = sing._job_payload(sing.JobRequest(song="晴天"))
+    assert "instrumental_volume" not in omitted
+    assert "backup_vocals_volume" not in omitted
+
+
 def test_client_song_error_maps_to_400(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("SING_GATEWAY_TOKEN", "secret")
 

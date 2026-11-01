@@ -73,6 +73,8 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_PITCH` | `2` | Default semitone shift |
 | `SING_START` | `60` | Default clip start (seconds) |
 | `SING_DURATION` | `25` | Default clip length (5–120) |
+| `SING_INSTRUMENTAL_VOLUME` | `-60` | Default instrumental gain in dB, `-60` (muted) to `0`; payload `"instrumental_volume"` overrides per request |
+| `SING_BACKUP_VOCALS_VOLUME` | `-60` | Default backup-vocal (harmony) gain in dB, same scale; payload `"backup_vocals_volume"` overrides per request |
 | `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili` or `netease` (payload `"source"` overrides per request) |
 | `SING_CACHE_TTL_HOURS` | `168` | Disk cache TTL |
 | `SING_CACHE_MAX_ENTRIES` | `50` | Disk cache entries |
@@ -234,6 +236,11 @@ Authorization: Bearer <SING_GATEWAY_TOKEN>
 {"song": "雨爱", "voice": "keine", "start": 60, "duration": 60}
 ```
 
+Optional mixing fields (dB gains, `-60` muted to `0` full): `"instrumental_volume"`
+keeps the original accompaniment under the converted vocal, `"backup_vocals_volume"`
+keeps the backing-harmony stem (also voice-converted). Both default to `-60`
+(vocals only); pass `0` for a full-band cover.
+
 ```json
 {"id": "job_...", "status": "queued", "stage": "queued", ...}
 ```
@@ -260,7 +267,7 @@ GET /sing/v1/jobs/job_...
   `error`). Clients poll every few seconds; `SING_JOB_TTL_SECONDS` keeps
   finished rows around for late polls.
 - Identical submissions share one job (same song/url + voice + start/duration +
-  pitch mode), so double-clicks and retries do not re-render.
+  pitch mode + mixing gains), so double-clicks and retries do not re-render.
 - Only `SING_MAX_CONCURRENCY` renders run at once; the rest wait in `queued`.
 - `duration_seconds` is the actual clip length (a VIP preview can be shorter
   than the requested duration) and `cached` marks a disk-cache hit. Both let a
