@@ -5,6 +5,12 @@ a public JSON endpoint that lists community RVC models with their external
 download links. Only direct Hugging Face zip links are imported — Google Drive
 links cannot be fetched by Replicate, so they are skipped.
 
+The same response carries A/B preview metadata (``sample.name`` plus
+``hasFemale``/``hasMale``). Entries get a ``preview_url`` pointing at the
+source's object store so the plaza can audition a voice without downloading the
+model. Re-running refreshes previews; entries the source stops exposing keep
+their previous URL through the merge.
+
 Re-running merges by the site's ``weightsId`` (idempotent): entries keep their
 existing slug, labels/URLs/favorites refresh, and unrelated keys in the file
 are preserved. Run it on the gateway host, where the file is read:
@@ -33,6 +39,10 @@ from sing_gateway.voice_meta import derive_metadata
 
 SOURCE_URL = "https://easyaivoice.com/run-model-library.php"
 PAGE_SIZE = 48  # server-side maximum
+# The source returns ``sampleConfig.baseUrls``; this is the one that resolves
+# and serves both samples/ and samples2/ today. Override with --sample-base if
+# the operator's network can only reach another mirror.
+SAMPLE_BASE_URL = "https://s3.us-west-000.backblazeb2.com/bbvoe3/"
 USER_AGENT = "octop-voice-catalog/1.0 (+self-hosted RVC voice catalog)"
 _TAG_RE = re.compile(r"\[[^\]]*\]|【[^】]*】")
 _SLUG_RE = re.compile(r"[^a-z0-9\u4e00-\u9fff]+")
@@ -84,6 +94,29 @@ def is_huggingface_zip(raw: str) -> bool:
     parsed = urllib.parse.urlparse(url)
     host = parsed.netloc.lower()
     return host == "huggingface.co" or host.endswith(".huggingface.co")
+
+
+def sample_preview_url(item: dict[str, Any], base: str = SAMPLE_BASE_URL) -> str:
+    """Build the source's A/B preview URL for one catalog item.
+
+    The source exposes ``sample.name`` plus ``hasFemale``/``hasMale``; the
+    audio lives under ``samples2/<name>.mp3`` (female) or ``samples/<name>.mp3``
+    (male) on a static object store. Female wins when both exist, matching the
+    source's own default. Pitch variants use ``.p<N>.mp3``; we use the
+    unshifted sample.
+    """
+    sample = item.get("sample")
+    if not isinstance(sample, dict):
+        return ""
+    if not sample.get("available") or not sample.get("name"):
+        return ""
+    name = urllib.parse.quote(str(sample["name"]), safe="")
+    root = str(base).rstrip("/") + "/"
+    if sample.get("hasFemale"):
+        return f"{root}samples2/{name}.mp3"
+    if sample.get("hasMale"):
+        return f"{root}samples/{name}.mp3"
+    return ""
 
 
 def is_excluded(url: str, exclude_urls: list[str]) -> bool:
@@ -164,6 +197,7 @@ def scrape(
     sleep: float = 0.3,
     timeout: float = 30.0,
     exclude_urls: list[str] | None = None,
+    sample_base: str = SAMPLE_BASE_URL,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     queries = searches or [""]
     exclude_urls = exclude_urls or []
@@ -210,6 +244,9 @@ def scrape(
                 "weights_id": weights_id,
             }
             entry.update(derive_metadata(name))
+            preview_url = sample_preview_url(item, sample_base)
+            if preview_url:
+                entry["preview_url"] = preview_url
             source_tags = item.get("tags")
             if source_tags:
                 merged = list(entry.get("tags") or [])
@@ -261,6 +298,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sleep", type=float, default=0.3, help="seconds between pages")
     parser.add_argument("--timeout", type=float, default=30.0, help="per-request timeout")
     parser.add_argument(
+        "--sample-base",
+        default=SAMPLE_BASE_URL,
+        help="object-store base URL for source A/B preview samples",
+    )
+    parser.add_argument(
         "--exclude-url",
         action="append",
         default=[],
@@ -278,6 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         sleep=args.sleep,
         timeout=args.timeout,
         exclude_urls=exclude_urls,
+        sample_base=args.sample_base,
     )
     merged = prune_excluded(sort_catalog(merge_into(existing, fresh)), exclude_urls)
     target.parent.mkdir(parents=True, exist_ok=True)

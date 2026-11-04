@@ -19,6 +19,7 @@ def _write_catalog(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
                 "hatsune-miku": {
                     "label": "Hatsune Miku (RVC V2) (Japanese)",
                     "url": "https://huggingface.co/a/b/resolve/main/miku.zip",
+                    "preview_url": "https://cdn.example/miku.mp3",
                     "favorites": 65,
                     "weights_id": 10,
                 },
@@ -65,6 +66,7 @@ def test_catalog_search_filter_and_pagination(
     by_miku_alias = catalog.search_catalog(q="初音")
     assert by_miku_alias["total"] == 1
     assert by_miku_alias["items"][0]["name"] == "hatsune-miku"
+    assert by_miku_alias["items"][0]["preview_url"] == "https://cdn.example/miku.mp3"
 
     english = catalog.search_catalog(language="en")
     assert [item["name"] for item in english["items"]] == ["columbina"]

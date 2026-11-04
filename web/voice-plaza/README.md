@@ -5,7 +5,8 @@ served by Caddy from the webroot, e.g. `/opt/caddy/data/voice-models/`).
 
 - `index.html` / `app.js` — catalog browser (paged through
   `GET /v1/voices/catalog`) plus a "社区公开" section fed by
-  `GET /v1/voices/public`.
+  `GET /v1/voices/public`. Cards with a `preview_url` get a 试听 button
+  (single shared `<audio>` element, no preloading).
 - `upload.html` / `upload.js` — self-service voice upload, calls the gateway's
   `/v1/voice-requests` and `/v1/auth/*` same-origin; approved voices can be
   published to the plaza from the result panel.

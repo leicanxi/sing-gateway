@@ -343,6 +343,10 @@ GET /v1/voices/catalog?q=&lang=&gender=&type=&sort=hot|favorites|new|label&limit
 - `sort=hot` orders by `voice_stats.uses`, then upstream favorites; `new` uses
   the source `weights_id`; the response includes `total`, `items` and
   `next_offset`.
+- Each item may include `preview_url` — the source's A/B sample (female first,
+  male fallback). The browser plays it with `preload="none"` and only one
+  preview at a time. `sing-catalog-scrape --sample-base …` overrides the
+  object-store base if a deployment cannot reach the default mirror.
 - Facets (`language`, `gender`, `type`, `rvc_version`, feature tags) are
   derived from the scraped label at read time and stored by the scraper.
 - `q` is normalized and expanded through a small Chinese/English alias table

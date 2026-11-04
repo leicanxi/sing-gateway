@@ -65,6 +65,60 @@
   let composing = false;
   let state = 'idle';
 
+  const previewAudio = new Audio();
+  previewAudio.preload = 'none';
+  let activeListenButton = null;
+
+  function resetListenButton(button) {
+    if (!button) return;
+    button.classList.remove('is-playing');
+    const label = button.querySelector('.listen-label');
+    if (label) label.textContent = '试听';
+  }
+
+  function stopPreview() {
+    previewAudio.pause();
+    previewAudio.removeAttribute('src');
+    previewAudio.load();
+    resetListenButton(activeListenButton);
+    activeListenButton = null;
+  }
+
+  function togglePreview(button) {
+    if (!button || !button.dataset.url) return;
+    if (activeListenButton === button && !previewAudio.paused) {
+      stopPreview();
+      return;
+    }
+    stopPreview();
+    activeListenButton = button;
+    button.classList.remove('is-error');
+    button.classList.add('is-playing');
+    const label = button.querySelector('.listen-label');
+    if (label) label.textContent = '暂停';
+    liveRegion.textContent = `正在试听 ${button.dataset.label || ''}`;
+    previewAudio.src = button.dataset.url;
+    previewAudio.play().catch(() => {
+      if (activeListenButton !== button) return;
+      button.classList.remove('is-playing');
+      button.classList.add('is-error');
+      if (label) label.textContent = '试听失败';
+      liveRegion.textContent = '试听加载失败，请换个音色试试';
+      activeListenButton = null;
+    });
+  }
+
+  previewAudio.addEventListener('ended', stopPreview);
+  previewAudio.addEventListener('error', () => {
+    if (!activeListenButton) return;
+    const button = activeListenButton;
+    button.classList.remove('is-playing');
+    button.classList.add('is-error');
+    const label = button.querySelector('.listen-label');
+    if (label) label.textContent = '试听失败';
+    activeListenButton = null;
+  });
+
   function itemChips(item, limit) {
     const chips = [];
     const language = LANGUAGE_LABEL[item.language];
@@ -97,6 +151,7 @@
     const start = reset ? 0 : offset;
 
     if (reset) {
+      stopPreview();
       offset = 0;
       total = 0;
       state = 'loading';
@@ -212,11 +267,25 @@
     copyButton.dataset.slug = item.name;
     copyButton.setAttribute('aria-label', `复制音色名 ${item.name}`);
 
+    const listen = card.querySelector('.listen');
+    if (item.preview_url) {
+      listen.hidden = false;
+      listen.dataset.url = item.preview_url;
+      listen.dataset.label = item.label || item.name;
+      listen.setAttribute('aria-label', `试听 ${item.label || item.name}`);
+    } else {
+      listen.remove();
+    }
+
     const download = card.querySelector('.download');
+    const foot = card.querySelector('.card-foot');
     if (item.url) {
       download.href = item.url;
     } else {
-      download.closest('.card-foot').remove();
+      download.remove();
+    }
+    if (foot && !foot.querySelector('.listen') && !foot.querySelector('.download')) {
+      foot.remove();
     }
 
     return card;
@@ -360,6 +429,12 @@
 
   grid.addEventListener('click', handleCopyClick);
   communityGrid.addEventListener('click', handleCopyClick);
+
+  grid.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target.closest('.listen') : null;
+    if (!target || !grid.contains(target)) return;
+    togglePreview(target);
+  });
 
   searchInput.addEventListener('compositionstart', () => {
     composing = true;

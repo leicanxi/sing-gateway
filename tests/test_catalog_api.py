@@ -23,6 +23,7 @@ def _setup(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
                 "hatsune-miku": {
                     "label": "Hatsune Miku (Japanese) (RVC V2)",
                     "url": "https://huggingface.co/a/b/resolve/main/miku.zip",
+                    "preview_url": "https://cdn.example/miku.mp3",
                     "favorites": 65,
                     "weights_id": 10,
                 },
@@ -60,6 +61,7 @@ def test_catalog_endpoint_search_alias_and_page(
     assert body["items"][0]["name"] == "hatsune-miku"
     assert body["items"][0]["language"] == "ja"
     assert body["items"][0]["rvc_version"] == "v2"
+    assert body["items"][0]["preview_url"] == "https://cdn.example/miku.mp3"
     assert body["next_offset"] is None
 
 
