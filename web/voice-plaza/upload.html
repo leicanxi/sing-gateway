@@ -18,7 +18,7 @@
         <div class="header-title">
           <p class="eyebrow">RVC VOICE CATALOG</p>
           <h1>上传音色</h1>
-          <p class="subtitle">提交你自己的 RVC 音色模型。审核通过后会生成一个专属音色名，只有知道这个名字的人才能用它点歌。</p>
+          <p class="subtitle">提交你自己的 RVC 音色模型。审核通过后会生成一个专属音色名，默认不公开；你可以只分享名字，也可以选择公开到广场。</p>
         </div>
         <a class="back-link" href="./">← 返回音色广场</a>
       </div>
@@ -47,7 +47,7 @@
           <span class="step-num" aria-hidden="true">03</span>
           <div class="step-body">
             <h3 class="step-title">记住音色名</h3>
-            <p class="step-text">通过后生成的音色名是使用凭证，请复制保存；之后发 <code>/点歌 歌名 音色名</code> 即可。</p>
+            <p class="step-text">通过后生成的音色名是使用凭证，请复制保存；之后发 <code>/点歌 歌名 音色名</code> 即可。也可以选择公开到广场，让别人自己发现。</p>
           </div>
         </li>
       </ol>
@@ -75,7 +75,44 @@
           <label for="label">音色显示名</label>
           <input id="label" name="label" type="text" maxlength="80" required autocomplete="off"
                  placeholder="例如：我的自训练音色 / 角色名">
-          <p class="field-hint">用于生成音色名，不会公开展示完整列表。</p>
+          <p class="field-hint">用于生成音色名；默认不公开，可在审核通过后选择公开到广场。</p>
+        </div>
+
+        <div class="field">
+          <label for="description">简介（可选）</label>
+          <textarea id="description" name="description" maxlength="300" rows="3"
+                    placeholder="这个音色适合什么歌、什么角色，或训练素材说明"></textarea>
+          <p class="field-hint">公开到广场时会展示，最多 300 字。</p>
+        </div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="language">语言</label>
+            <select id="language" name="language">
+              <option value="">未指定</option>
+              <option value="zh">中文</option>
+              <option value="ja">日语</option>
+              <option value="en">英语</option>
+              <option value="ko">韩语</option>
+              <option value="other">其他</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="gender">声音类型</label>
+            <select id="gender" name="gender">
+              <option value="">未指定</option>
+              <option value="female">女声</option>
+              <option value="male">男声</option>
+              <option value="neutral">中性</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="tags">标签（可选）</label>
+          <input id="tags" name="tags" type="text" maxlength="120" autocomplete="off"
+                 placeholder="用逗号分隔，例如：初音未来, VOCALOID, 女声">
+          <p class="field-hint">最多 8 个，每个不超过 16 个字符。</p>
         </div>
 
         <div class="field">
@@ -122,6 +159,11 @@
           <button class="copy" id="copy-name" type="button">复制</button>
         </div>
         <p class="result-usage" id="result-usage" hidden>用法：在聊天里发送 <code>/点歌 歌名 音色名</code>，或对机器人说「用这个音色唱一首…」。</p>
+        <div class="result-actions" id="result-actions" hidden>
+          <button class="primary-button" id="publish-button" type="button">公开到广场</button>
+          <button class="copy" id="copy-share" type="button">复制分享文案</button>
+          <span class="result-public" id="result-public" hidden>已公开到广场</span>
+        </div>
       </div>
 
       <p class="status-line" id="status-line" hidden></p>

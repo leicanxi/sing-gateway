@@ -6,9 +6,11 @@ optional LLM review over a compact summary, then auto-approves by writing the
 voice into ``sing-voices.json``. Names get a random suffix so a submitted voice
 stays known only to its submitter.
 
-Records live in ``sing-voice-requests.json`` (``SING_VOICE_REQUESTS_FILE``) so
-the plaza status page can resolve a submission and a future FlowBee JWT login
-can bind requests to accounts by ``flowbee_user``.
+Records and publication state live in SQLite (``SING_DB_PATH``); the old
+``sing-voice-requests.json`` file is imported once on first use and then kept
+only as an operator backup. Approved voices are still mirrored into the
+resolver whitelist (``sing-voices.json``) so the gateway and chat plugin can
+resolve them without touching the database.
 """
 
 from __future__ import annotations
@@ -28,7 +30,10 @@ from typing import Any
 
 import httpx
 
+from sing_gateway import db as store
 from sing_gateway.voices import voices_path
+
+StateError = store.StateError
 
 logger = logging.getLogger(__name__)
 
@@ -133,28 +138,113 @@ def requests_path() -> Path:
     return home / "sing-voice-requests.json"
 
 
-def _load_requests(path: Path | None = None) -> dict[str, Any]:
-    target = path or requests_path()
-    try:
-        raw = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return raw if isinstance(raw, dict) else {}
+def _ensure_db() -> None:
+    """Open the SQLite store, importing the legacy JSON file on first use."""
+    store.init_db(legacy_requests=requests_path())
 
 
 def save_request(entry: dict[str, Any], path: Path | None = None) -> None:
-    target = path or requests_path()
-    records = _load_requests(target)
-    records[str(entry["id"])] = entry
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(records, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    tmp.replace(target)
+    """Insert or update a submission record (``path`` is kept for compatibility)."""
+    _ensure_db()
+    store.upsert_request(entry)
 
 
 def get_request(request_id: str, path: Path | None = None) -> dict[str, Any] | None:
-    record = _load_requests(path).get(request_id)
-    return record if isinstance(record, dict) else None
+    _ensure_db()
+    return store.get_request(request_id)
+
+
+def list_requests_by_uid(uid: int) -> list[dict[str, Any]]:
+    _ensure_db()
+    return store.list_requests_by_uid(uid)
+
+
+def list_public_voices(limit: int = 24, sort: str = "new") -> list[dict[str, Any]]:
+    _ensure_db()
+    return store.list_public(limit=limit, sort=sort)
+
+
+def set_visibility(
+    request_id: str,
+    visibility: str,
+    *,
+    actor_uid: int | None = None,
+    actor_role: str = "user",
+    reason: str = "",
+) -> dict[str, Any] | None:
+    _ensure_db()
+    return store.set_visibility(
+        request_id,
+        visibility,
+        actor_uid=actor_uid,
+        actor_role=actor_role,
+        reason=reason,
+    )
+
+
+def set_moderation(
+    request_id: str,
+    moderation: str,
+    *,
+    actor_uid: int | None = None,
+    actor_role: str = "admin",
+    reason: str = "",
+) -> dict[str, Any] | None:
+    _ensure_db()
+    return store.set_moderation(
+        request_id,
+        moderation,
+        actor_uid=actor_uid,
+        actor_role=actor_role,
+        reason=reason,
+    )
+
+
+def add_event(
+    request_id: str,
+    name: str,
+    action: str,
+    *,
+    actor_uid: int | None = None,
+    actor_role: str = "system",
+    reason: str = "",
+) -> None:
+    _ensure_db()
+    store.add_event(
+        request_id,
+        name,
+        action,
+        actor_uid=actor_uid,
+        actor_role=actor_role,
+        reason=reason,
+    )
+
+
+def increment_usage(name: str) -> int:
+    _ensure_db()
+    return store.increment_usage(name)
+
+
+def get_usage(name: str) -> int:
+    _ensure_db()
+    return store.get_usage(name)
+
+
+def usage_map() -> dict[str, int]:
+    _ensure_db()
+    return store.usage_map()
+
+
+def list_events(request_id: str) -> list[dict[str, Any]]:
+    _ensure_db()
+    return store.list_events(request_id)
+
+
+def _write_voices(raw: dict[str, Any], target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(target)
 
 
 def add_voice(name: str, label: str, url: str, *, extra: dict[str, Any] | None = None) -> None:
@@ -170,10 +260,52 @@ def add_voice(name: str, label: str, url: str, *, extra: dict[str, Any] | None =
     if extra:
         entry.update(extra)
     raw[name] = entry
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(target)
+    _write_voices(raw, target)
+
+
+def reconcile_whitelist(path: Path | None = None) -> None:
+    """Repair drift between the SQLite state and the resolver whitelist.
+
+    The whitelist is a runtime index, not the business record. An approval can
+    succeed in SQLite but fail to write JSON (or a delete can remove one side
+    only), so at startup we re-apply approved entries and drop deleted/rejected
+    ones. Manual entries with no submission are left untouched.
+    """
+    _ensure_db()
+    target = path or voices_path()
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raw = {}
+    except (OSError, ValueError):
+        logger.warning("cannot parse %s; skipping whitelist reconciliation", target)
+        return
+    if not isinstance(raw, dict):
+        logger.warning("%s is not an object; skipping whitelist reconciliation", target)
+        return
+    changed = False
+    for record in store.list_requests():
+        name = str(record.get("name") or "").strip().lower()
+        if not name:
+            continue
+        status = str(record.get("status") or "")
+        if status == "approved":
+            url = str(record.get("url") or "").strip()
+            if url and name not in raw:
+                raw[name] = {
+                    "label": record.get("label") or name,
+                    "url": url,
+                    "added_by": record.get("flowbee_user") or "",
+                    "source": record.get("source") or "",
+                    "added_at": int(record.get("created_at") or time.time()),
+                }
+                changed = True
+        elif status in {"deleted", "rejected"} and name in raw:
+            raw.pop(name, None)
+            changed = True
+    if changed:
+        _write_voices(raw, target)
+        logger.info("reconciled resolver whitelist (%s entries)", len(raw))
 
 
 def valid_flowbee_user(value: str) -> bool:
@@ -392,7 +524,14 @@ def build_request_record(
     approved: bool,
     reason: str,
     flowbee_uid: int = 0,
+    tags: list[str] | None = None,
+    language: str = "",
+    gender: str = "",
+    rvc_version: str = "",
+    description: str = "",
+    author_display: str = "",
 ) -> dict[str, Any]:
+    now = int(time.time())
     return {
         "id": request_id,
         "name": name,
@@ -402,8 +541,18 @@ def build_request_record(
         "flowbee_uid": flowbee_uid,
         "source": source,
         "status": "approved" if approved else "rejected",
+        "visibility": "private",
+        "moderation": "ok",
         "reason": reason,
-        "created_at": int(time.time()),
+        "author_display": author_display,
+        "language": language,
+        "gender": gender,
+        "rvc_version": rvc_version,
+        "tags": list(tags or []),
+        "description": description,
+        "created_at": now,
+        "updated_at": now,
+        "published_at": None,
     }
 
 
@@ -452,22 +601,19 @@ def modelscope_upload(local_path: Path, *, repo_id: str, path_in_repo: str, toke
 
 
 def list_requests(path: Path | None = None) -> list[dict[str, Any]]:
-    return [record for record in _load_requests(path).values() if isinstance(record, dict)]
+    _ensure_db()
+    return store.list_requests()
 
 
-def mark_deleted(request_id: str, path: Path | None = None) -> dict[str, Any] | None:
-    target = path or requests_path()
-    records = _load_requests(target)
-    record = records.get(request_id)
-    if not isinstance(record, dict):
-        return None
-    record["status"] = "deleted"
-    record["deleted_at"] = int(time.time())
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(records, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    tmp.replace(target)
-    return record
+def mark_deleted(
+    request_id: str,
+    path: Path | None = None,
+    *,
+    actor_uid: int | None = None,
+    actor_role: str = "user",
+) -> dict[str, Any] | None:
+    _ensure_db()
+    return store.mark_deleted(request_id, actor_uid=actor_uid, actor_role=actor_role)
 
 
 def modelscope_delete(*, repo_id: str, token: str, path_in_repo: str) -> None:

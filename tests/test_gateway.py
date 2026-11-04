@@ -260,6 +260,7 @@ def test_client_song_error_maps_to_400(monkeypatch: MonkeyPatch) -> None:
 def _submission_env(monkeypatch: MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("SING_VOICES_FILE", str(tmp_path / "voices.json"))
     monkeypatch.setenv("SING_VOICE_REQUESTS_FILE", str(tmp_path / "requests.json"))
+    monkeypatch.setenv("SING_DB_PATH", str(tmp_path / "sing.db"))
     monkeypatch.setenv("SING_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("SING_PUBLIC_BASE_URL", "https://plaza.example")
     monkeypatch.setenv("SING_UPLOAD_DAILY_LIMIT", "100")
@@ -792,3 +793,155 @@ def test_auth_callback_accepts_legacy_ticket_without_audience(
     callback = client.get(f"/v1/auth/callback?code={code}&state={state}", follow_redirects=False)
     assert callback.status_code == 302
     assert callback.headers["location"] == "https://plaza.example/upload.html"
+
+
+def _approved_record(uid: int = 7, name: str = "mine-1a2b") -> dict[str, object]:
+    from sing_gateway import submissions as subs
+
+    return subs.build_request_record(
+        request_id=f"vr-{name}",
+        name=name,
+        label="Mine",
+        url="https://example.com/m.zip",
+        flowbee_user="alice" if uid == 7 else "bob",
+        source="upload",
+        approved=True,
+        reason="ok",
+        flowbee_uid=uid,
+        tags=["女声", "测试"],
+        language="zh",
+        gender="female",
+    )
+
+
+def test_publish_makes_voice_public_and_unpublish_removes(
+    monkeypatch: MonkeyPatch, tmp_path
+) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    from sing_gateway import submissions as subs
+
+    subs.save_request(_approved_record())
+
+    response = _client().post("/v1/voice-requests/vr-mine-1a2b/publish", cookies=_session())
+    assert response.status_code == 200
+    assert response.json()["submission"]["visibility"] == "public"
+
+    listing = _client().get("/v1/voices/public").json()["voices"]
+    assert [item["name"] for item in listing] == ["mine-1a2b"]
+    assert listing[0]["tags"] == ["女声", "测试"]
+    assert listing[0]["author"] == "社区投稿"
+    assert "flowbee_uid" not in listing[0]
+    assert "flowbee_user" not in listing[0]
+
+    unpublish = _client().post("/v1/voice-requests/vr-mine-1a2b/unpublish", cookies=_session())
+    assert unpublish.status_code == 200
+    assert _client().get("/v1/voices/public").json()["voices"] == []
+
+
+def test_publish_requires_owner(monkeypatch: MonkeyPatch, tmp_path) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    from sing_gateway import submissions as subs
+
+    subs.save_request(_approved_record())
+    response = _client().post(
+        "/v1/voice-requests/vr-mine-1a2b/publish", cookies=_session("bob", 8)
+    )
+    assert response.status_code == 404
+
+
+def test_publish_requires_approved(monkeypatch: MonkeyPatch, tmp_path) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    from sing_gateway import submissions as subs
+
+    record = subs.build_request_record(
+        request_id="vr-bad",
+        name="",
+        label="Bad",
+        url="",
+        flowbee_user="alice",
+        source="upload",
+        approved=False,
+        reason="nope",
+        flowbee_uid=7,
+    )
+    subs.save_request(record)
+    response = _client().post("/v1/voice-requests/vr-bad/publish", cookies=_session())
+    assert response.status_code == 400
+    assert "审核通过" in response.json()["detail"]
+
+
+def test_public_list_sorts_by_usage(monkeypatch: MonkeyPatch, tmp_path) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    from sing_gateway import submissions as subs
+
+    subs.save_request(_approved_record(name="a-aaaa"))
+    subs.save_request(_approved_record(name="b-bbbb"))
+    _client().post("/v1/voice-requests/vr-a-aaaa/publish", cookies=_session())
+    _client().post("/v1/voice-requests/vr-b-bbbb/publish", cookies=_session())
+    subs.increment_usage("a-aaaa")
+    subs.increment_usage("b-bbbb")
+    subs.increment_usage("b-bbbb")
+
+    hot = _client().get("/v1/voices/public?sort=hot").json()["voices"]
+    assert [item["name"] for item in hot] == ["b-bbbb", "a-aaaa"]
+    assert hot[0]["uses"] == 2
+
+
+def test_moderation_blocks_public_voice_and_prevents_republish(
+    monkeypatch: MonkeyPatch, tmp_path
+) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("SING_GATEWAY_TOKEN", "secret")
+    from sing_gateway import submissions as subs
+
+    subs.save_request(_approved_record())
+    _client().post("/v1/voice-requests/vr-mine-1a2b/publish", cookies=_session())
+
+    response = _client().post(
+        "/v1/voice-requests/vr-mine-1a2b/moderate",
+        headers={"Authorization": "Bearer secret"},
+        json={"moderation": "blocked", "reason": "copyright"},
+    )
+    assert response.status_code == 200
+    assert response.json()["submission"]["moderation"] == "blocked"
+    assert response.json()["submission"]["visibility"] == "private"
+    assert _client().get("/v1/voices/public").json()["voices"] == []
+
+    republish = _client().post(
+        "/v1/voice-requests/vr-mine-1a2b/publish", cookies=_session()
+    )
+    assert republish.status_code == 400
+    assert "下架" in republish.json()["detail"]
+
+
+def test_render_increments_voice_usage(monkeypatch: MonkeyPatch, tmp_path) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    (tmp_path / "voices.json").write_text(
+        json.dumps({"cirno": "https://example.com/cirno.zip"}), encoding="utf-8"
+    )
+    from sing_gateway import submissions as subs
+
+    monkeypatch.setattr(
+        sing,
+        "render_song",
+        lambda url, cfg: SingResult("https://cdn/a.mp3", "a.mp3"),
+    )
+    block = sing._render({"voice": "cirno", "url": "https://example.com/song.mp3"})
+    assert block["type"] == "audio"
+    assert subs.get_usage("cirno") == 1
+
+
+def test_events_record_publish_unpublish_delete(monkeypatch: MonkeyPatch, tmp_path) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    from sing_gateway import submissions as subs
+
+    subs.save_request(_approved_record())
+    subs.add_event(
+        "vr-mine-1a2b", "mine-1a2b", "approved", actor_uid=7, actor_role="system"
+    )
+    _client().post("/v1/voice-requests/vr-mine-1a2b/publish", cookies=_session())
+    _client().post("/v1/voice-requests/vr-mine-1a2b/unpublish", cookies=_session())
+    _client().delete("/v1/voice-requests/vr-mine-1a2b", cookies=_session())
+
+    actions = [item["action"] for item in subs.list_events("vr-mine-1a2b")]
+    assert actions == ["approved", "published", "unpublished", "deleted"]

@@ -80,6 +80,7 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_JOB_TTL_SECONDS` | `3600` | Finished job rows kept for status polling |
 | `SING_VOICES_FILE` | `~/.octop/sing-voices.json` | Admin-managed voice whitelist |
 | `SING_VOICES_CATALOG_FILE` | `~/.octop/sing-voices-catalog.json` | Scraped public catalog (see [Voice catalog](#voice-catalog)) |
+| `SING_VOICE_ALIASES_FILE` | `~/.octop/sing-voice-aliases.json` | Extra search aliases, flat JSON (`{"初音": ["hatsune miku"]}`) |
 | `SING_VOICE_PLAZA_URL` | `https://voice-models.flowbee.top` | Voice plaza link returned by the guide endpoints |
 | `SING_BILI_COOKIES` | — | Path to a Netscape `cookies.txt` for Bilibili (see HTTP 412 below) |
 | `SING_PROXY` | — | Optional proxy (`http://host:port`) for Bilibili search/download |
@@ -330,6 +331,26 @@ can show the same guidance:
 Keep `sing-voices` priced at 0 on new-api — the response `usage` is all zeros,
 so the call is free either way.
 
+### Catalog browsing API
+
+The plaza no longer ships the whole scraped catalog to the browser. It pages
+through the gateway instead:
+
+```text
+GET /v1/voices/catalog?q=&lang=&gender=&type=&sort=hot|favorites|new|label&limit=60&offset=0
+```
+
+- `sort=hot` orders by `voice_stats.uses`, then upstream favorites; `new` uses
+  the source `weights_id`; the response includes `total`, `items` and
+  `next_offset`.
+- Facets (`language`, `gender`, `type`, `rvc_version`, feature tags) are
+  derived from the scraped label at read time and stored by the scraper.
+- `q` is normalized and expanded through a small Chinese/English alias table
+  (`初音` → `Hatsune Miku`, `原神` → `Genshin Impact`, …); prefix matches work
+  while the user is typing. Add custom aliases with `SING_VOICE_ALIASES_FILE`
+  (flat JSON: `{"初音": ["hatsune miku", "miku"]}`).
+- The endpoint is public; the plaza calls it same-origin through Caddy.
+
 ## Voice submissions (self-service uploads)
 
 FlowBee-mode users (who cannot edit this whitelist themselves) submit their own
@@ -357,9 +378,13 @@ created them and each user can manage (list/delete) their own from the plaza.
 | `GET /v1/auth/callback?code&state` | public | verifies the FlowBee ticket, sets the session cookie, redirects back |
 | `GET /v1/auth/me` | session | `{uid, username, name}` or 401 |
 | `POST /v1/auth/logout` | session | clears the session cookie |
-| `POST /v1/voice-requests` | session | multipart (`label`, `file` \| `url`) or JSON `{label, url}`; identity comes from the session |
-| `GET /v1/voice-requests/mine` | session | the caller's submissions |
+| `POST /v1/voice-requests` | session | multipart (`label`, `file` \| `url`, optional `description`/`language`/`gender`/`tags`) or JSON; identity comes from the session |
+| `GET /v1/voice-requests/mine` | session | the caller's submissions, including `visibility` |
+| `POST /v1/voice-requests/{id}/publish` | session (owner) | list an approved voice on the plaza |
+| `POST /v1/voice-requests/{id}/unpublish` | session (owner) | remove it from the plaza (the name still works for anyone who knows it) |
 | `DELETE /v1/voice-requests/{id}` | session (owner) | removes the whitelist entry **and** the stored model file |
+| `POST /v1/voice-requests/{id}/moderate` | gateway token | `{moderation: "ok"\|"blocked", reason}` for takedowns; blocking also unpublishes |
+| `GET /v1/voices/public?limit=&sort=new\|hot` | public | published community voices (no uid/username in the projection) |
 | `GET /v1/voice-requests/{id}` | public | submission status (the id is the capability) |
 
 ### Login (FlowBee SSO)
@@ -393,9 +418,28 @@ check the `Origin`/`Referer` host. A disabled FlowBee account keeps a valid
 session for at most `SING_JWT_TTL_HOURS` (no per-request callback to new-api).
 
 Approved voices are written into the whitelist with a random 4-hex name
-suffix (`atri-7f3k`) so a submitted voice stays known only to its submitter;
-records go to `sing-voice-requests.json` with the submitter's FlowBee username
-for future account-based migration.
+suffix (`atri-7f3k`) so a submitted voice stays private by default. Owners can
+publish an approved voice to the plaza; publishing only changes its listing
+state, not the name — anyone who knows the name can still use it after an
+unpublish. Deleting is the operation that removes it from the whitelist.
+
+Submission state, publication state and the audit trail live in SQLite
+(`SING_DB_PATH`, default `~/.octop/sing.db`):
+
+- `voice_requests` — current submission/publication state (source of truth)
+- `voice_events` — append-only lifecycle audit (`approved`/`rejected`/
+  `published`/`unpublished`/`blocked`/`deleted`/`imported`)
+- `voice_stats` — per-voice `uses`/`last_used` counters for the hot list
+
+The old `sing-voice-requests.json` is imported once on first start and then
+kept only as an operator backup. Tags and facets (`language`, `gender`,
+`rvc_version`, free-form `tags`) are stored with the submission; the plaza
+projects them, while the resolver ignores them.
+
+`sing-voices.json` remains the runtime resolver index. Approved rows are
+mirrored into it, and the gateway reconciles it on startup: missing approved
+entries are restored from SQLite, while deleted/rejected ones are removed.
+Manual entries with no submission row are never touched.
 
 File storage priority — the gateway host can keep zero model files:
 
@@ -428,7 +472,8 @@ validated.
 | `SING_PUBLIC_BASE_URL` | — | Public base URL that serves `SING_UPLOAD_DIR` (e.g. the plaza origin) |
 | `SING_UPLOAD_MAX_MB` | `300` | Per-submission archive size cap |
 | `SING_UPLOAD_DAILY_LIMIT` | `5` | Submissions per client IP per day (`0` disables the limit) |
-| `SING_VOICE_REQUESTS_FILE` | `~/.octop/sing-voice-requests.json` | Submission records |
+| `SING_DB_PATH` | `~/.octop/sing.db` | SQLite database for submissions, publication state, events and usage |
+| `SING_VOICE_REQUESTS_FILE` | `~/.octop/sing-voice-requests.json` | Legacy submission JSON, imported once into SQLite |
 | `SING_REVIEW_BASE_URL` | — | OpenAI-compatible base URL for LLM review (disabled when empty) |
 | `SING_REVIEW_API_KEY` | — | Key for the review model |
 | `SING_REVIEW_MODEL` | `deepseek-chat` | Review model name |
@@ -489,10 +534,14 @@ or plain text (`雨爱`). Plain text is treated as the song name.
 The plaza frontend is a plain static site in
 [`web/voice-plaza/`](web/voice-plaza/) — catalog browser, self-service upload
 and account management pages, no build step. It calls the gateway same-origin
-(`/v1/voices` guide, `/v1/voice-requests*`, `/v1/auth/*`); deploy it to any
-static webroot fronting the gateway (the FlowBee host uses Caddy at
-`/opt/caddy/data/voice-models/`). `catalog.json` is generated on the gateway
-host by `sing-catalog-scrape` and is not committed.
+(`/v1/voices` guide, `/v1/voices/catalog`, `/v1/voices/public`,
+`/v1/voice-requests*`, `/v1/auth/*`); deploy it to any static webroot fronting
+the gateway (the FlowBee host uses Caddy at
+`/opt/caddy/data/voice-models/`).
+
+The gateway reads the catalog from `SING_VOICES_CATALOG_FILE` on its own host,
+so the old webroot `catalog.json` copy is no longer required by the frontend.
+Keep it only if another consumer still reads it.
 
 ## License
 

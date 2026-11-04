@@ -78,6 +78,63 @@ def test_other_prediction_failures_stay_runtime_error(
     assert "cuDNN" in str(excinfo.value)
 
 
+def test_dead_voice_link_maps_to_client_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _predict_with_job(
+        monkeypatch,
+        {
+            "status": "failed",
+            "error": "HTTP Error 404: Not Found",
+            "logs": (
+                "[!] The model will be downloaded as 'GawrGura_RVC_v2'.\n"
+                "[~] Downloading voice model with name GawrGura_RVC_v2...\n"
+                "Traceback (most recent call last):\n"
+                "urllib.error.HTTPError: HTTP Error 404: Not Found"
+            ),
+        },
+    )
+    with pytest.raises(ClientSongError) as excinfo:
+        replicate.predict_cover(
+            "https://api.replicate.com/v1",
+            "r8_test",
+            "https://x/song.mp3",
+            SingConfig(replicate_token="r8_test", model_version="v-test"),
+        )
+    assert "HTTP 404" in str(excinfo.value)
+    assert "换一个音色" in str(excinfo.value)
+
+
+def test_private_voice_link_maps_to_client_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _predict_with_job(
+        monkeypatch,
+        {
+            "status": "failed",
+            "error": "HTTP Error 401: Unauthorized",
+            "logs": "[~] Downloading voice model with name aya...",
+        },
+    )
+    with pytest.raises(ClientSongError) as excinfo:
+        replicate.predict_cover(
+            "https://api.replicate.com/v1",
+            "r8_test",
+            "https://x/song.mp3",
+            SingConfig(replicate_token="r8_test", model_version="v-test"),
+        )
+    assert "HTTP 401" in str(excinfo.value)
+
+
+def test_song_download_404_is_not_a_voice_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _predict_by_job = {"status": "failed", "error": "HTTP Error 404: Not Found"}
+    _predict_with_job(monkeypatch, _predict_by_job)
+    with pytest.raises(RuntimeError) as excinfo:
+        replicate.predict_cover(
+            "https://api.replicate.com/v1",
+            "r8_test",
+            "https://x/song.mp3",
+            SingConfig(replicate_token="r8_test", model_version="v-test"),
+        )
+    assert not isinstance(excinfo.value, ClientSongError)
+
+
 def test_payload_carries_configured_mixing_volumes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

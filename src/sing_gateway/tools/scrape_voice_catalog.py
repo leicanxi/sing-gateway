@@ -29,6 +29,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from sing_gateway.voice_meta import derive_metadata
+
 SOURCE_URL = "https://easyaivoice.com/run-model-library.php"
 PAGE_SIZE = 48  # server-side maximum
 USER_AGENT = "octop-voice-catalog/1.0 (+self-hosted RVC voice catalog)"
@@ -82,6 +84,29 @@ def is_huggingface_zip(raw: str) -> bool:
     parsed = urllib.parse.urlparse(url)
     host = parsed.netloc.lower()
     return host == "huggingface.co" or host.endswith(".huggingface.co")
+
+
+def is_excluded(url: str, exclude_urls: list[str]) -> bool:
+    """True when *url* contains one of the ``--exclude-url`` substrings."""
+    lowered = url.lower()
+    return any(token in lowered for token in exclude_urls)
+
+
+def prune_excluded(catalog: dict[str, Any], exclude_urls: list[str]) -> dict[str, Any]:
+    """Drop entries whose URL matches an exclusion substring.
+
+    Runs after the merge so a dead link keeps matching the re-scrape result;
+    without this, entries deleted by hand come back on the weekly refresh.
+    """
+    if not exclude_urls:
+        return catalog
+    return {
+        slug: entry
+        for slug, entry in catalog.items()
+        if not is_excluded(
+            str(entry.get("url") or "") if isinstance(entry, dict) else "", exclude_urls
+        )
+    }
 
 
 def load_existing(path: Path) -> dict[str, Any]:
@@ -138,9 +163,17 @@ def scrape(
     limit: int = 0,
     sleep: float = 0.3,
     timeout: float = 30.0,
+    exclude_urls: list[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     queries = searches or [""]
-    stats = {"fetched": 0, "kept": 0, "skipped_source": 0, "skipped_shape": 0}
+    exclude_urls = exclude_urls or []
+    stats = {
+        "fetched": 0,
+        "kept": 0,
+        "skipped_source": 0,
+        "skipped_shape": 0,
+        "skipped_exclude": 0,
+    }
     pool = SlugPool(existing)
     catalog: dict[str, Any] = {}
     for query in queries:
@@ -157,6 +190,10 @@ def scrape(
             if not is_huggingface_zip(url):
                 stats["skipped_source"] += 1
                 continue
+            normalized = normalize_url(url)
+            if is_excluded(normalized, exclude_urls):
+                stats["skipped_exclude"] += 1
+                continue
             if raw_weights_id is None:
                 stats["skipped_shape"] += 1
                 continue
@@ -166,12 +203,26 @@ def scrape(
                 stats["skipped_shape"] += 1
                 continue
             slug = pool.for_weights(weights_id, name)
-            catalog[slug] = {
+            entry: dict[str, Any] = {
                 "label": clean_label(name),
-                "url": normalize_url(url),
+                "url": normalized,
                 "favorites": int((item.get("stats") or {}).get("favoriteCount") or 0),
                 "weights_id": weights_id,
             }
+            entry.update(derive_metadata(name))
+            source_tags = item.get("tags")
+            if source_tags:
+                merged = list(entry.get("tags") or [])
+                values = source_tags if isinstance(source_tags, (list, tuple)) else [source_tags]
+                for raw_tag in values:
+                    tag = str(raw_tag).strip()
+                    if tag and tag not in merged:
+                        merged.append(tag)
+                if merged:
+                    entry["tags"] = merged[:8]
+            if item.get("aliases"):
+                entry["aliases"] = item["aliases"]
+            catalog[slug] = entry
             stats["kept"] += 1
     return catalog, stats
 
@@ -209,18 +260,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=0, help="stop after N kept entries")
     parser.add_argument("--sleep", type=float, default=0.3, help="seconds between pages")
     parser.add_argument("--timeout", type=float, default=30.0, help="per-request timeout")
+    parser.add_argument(
+        "--exclude-url",
+        action="append",
+        default=[],
+        help="repeatable URL substring; matching entries are dropped from the catalog",
+    )
     args = parser.parse_args(argv)
 
     target = (args.out or default_out()).expanduser()
     existing = load_existing(target)
+    exclude_urls = [token.strip().lower() for token in args.exclude_url if token.strip()]
     fresh, stats = scrape(
         list(args.search),
         existing=existing,
         limit=args.limit,
         sleep=args.sleep,
         timeout=args.timeout,
+        exclude_urls=exclude_urls,
     )
-    merged = sort_catalog(merge_into(existing, fresh))
+    merged = prune_excluded(sort_catalog(merge_into(existing, fresh)), exclude_urls)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
@@ -228,6 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"fetched={stats['fetched']} kept={stats['kept']} "
         f"skipped_source={stats['skipped_source']} skipped_shape={stats['skipped_shape']} "
+        f"skipped_exclude={stats['skipped_exclude']} "
         f"total={len(merged)} -> {target} ({target.stat().st_size / 1024:.0f} KiB)"
     )
     return 0

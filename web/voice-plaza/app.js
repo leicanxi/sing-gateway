@@ -16,172 +16,72 @@
   const resultCount = document.getElementById('result-count');
   const searchInput = document.getElementById('search');
   const sortSelect = document.getElementById('sort');
+  const filterLanguage = document.getElementById('filter-language');
+  const filterGender = document.getElementById('filter-gender');
   const loadMoreWrap = document.getElementById('load-more-wrap');
   const loadMoreButton = document.getElementById('load-more');
   const liveRegion = document.getElementById('live');
   const header = document.querySelector('.site-header');
   const catalogSection = document.querySelector('.catalog');
   const cardTemplate = document.getElementById('card-template');
+  const communitySection = document.getElementById('community');
+  const communityGrid = document.getElementById('community-grid');
+  const communityStatus = document.getElementById('community-status');
+  const communitySort = document.getElementById('community-sort');
+  const communityTemplate = document.getElementById('community-card-template');
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-  const collator = new Intl.Collator('zh', { numeric: true, sensitivity: 'base' });
   const numberFormat = new Intl.NumberFormat('zh-CN');
   const copyTimers = new WeakMap();
 
-  let voices = [];
-  let bases = { favorites: [], label: [] };
-  let view = [];
-  let renderedCount = 0;
-  let activeSort = 'favorites';
+  const LANGUAGE_LABEL = {
+    zh: '中文',
+    ja: '日语',
+    en: '英语',
+    ko: '韩语',
+    es: '西班牙语',
+    fr: '法语',
+    de: '德语',
+    ru: '俄语',
+    pt: '葡萄牙语',
+    it: '意大利语',
+    other: '其他',
+  };
+  const GENDER_LABEL = {
+    female: '女声',
+    male: '男声',
+    neutral: '中性',
+  };
+
+  let activeSort = 'hot';
+  let activeLanguage = '';
+  let activeGender = '';
   let query = '';
+  let offset = 0;
+  let total = 0;
+  let loading = false;
+  let requestSeq = 0;
   let searchTimer = 0;
   let composing = false;
   let state = 'idle';
 
-  function normalizeCatalog(raw) {
-    if (!raw || typeof raw !== 'object') {
-      throw new Error('catalog.json 不是有效的对象');
+  function itemChips(item, limit) {
+    const chips = [];
+    const language = LANGUAGE_LABEL[item.language];
+    if (language) chips.push(language);
+    const gender = GENDER_LABEL[item.gender];
+    if (gender) chips.push(gender);
+    if (item.type === 'instrumental') chips.push('乐器');
+    if (item.rvc_version) chips.push(String(item.rvc_version).toUpperCase());
+    for (const raw of item.tags || []) {
+      const tag = String(raw || '').trim();
+      if (tag && !chips.includes(tag)) chips.push(tag);
     }
-
-    const items = [];
-    for (const [slug, value] of Object.entries(raw)) {
-      if (!slug || !value || typeof value !== 'object') continue;
-
-      const label = typeof value.label === 'string' && value.label.trim()
-        ? value.label.trim()
-        : slug;
-
-      items.push({
-        slug,
-        label,
-        url: toSafeUrl(value.url),
-        favorites: toFavorites(value.favorites),
-        searchText: `${label}\n${slug}`.toLowerCase(),
-      });
-    }
-    return items;
-  }
-
-  function toFavorites(value) {
-    if (value === null || value === undefined || value === '') return null;
-    const numeric = Number(value);
-    return Number.isFinite(numeric) ? numeric : null;
-  }
-
-  function toSafeUrl(value) {
-    if (typeof value !== 'string' || !value.trim()) return null;
-    try {
-      const url = new URL(value, window.location.href);
-      if (url.protocol === 'http:' || url.protocol === 'https:') {
-        return url.href;
-      }
-    } catch (_) {
-      // Ignore malformed URLs; the card simply omits the download link.
-    }
-    return null;
-  }
-
-  function compareFavorites(a, b) {
-    const aFav = a.favorites === null ? -1 : a.favorites;
-    const bFav = b.favorites === null ? -1 : b.favorites;
-    if (aFav !== bFav) return bFav - aFav;
-    return compareLabels(a, b);
-  }
-
-  function compareLabels(a, b) {
-    return collator.compare(a.label, b.label) || collator.compare(a.slug, b.slug);
-  }
-
-  function showLoading() {
-    state = 'loading';
-    voices = [];
-    bases = { favorites: [], label: [] };
-    view = [];
-    renderedCount = 0;
-    grid.replaceChildren();
-    emptyBox.hidden = true;
-    errorBox.hidden = true;
-    loadMoreWrap.hidden = true;
-    statusLine.hidden = false;
-    statusLine.textContent = '正在加载音色目录…';
-    resultCount.textContent = '正在加载…';
-  }
-
-  function showError() {
-    state = 'error';
-    grid.replaceChildren();
-    emptyBox.hidden = true;
-    loadMoreWrap.hidden = true;
-    statusLine.hidden = true;
-    errorText.textContent = '音色目录加载失败，请检查网络后重试。';
-    errorBox.hidden = false;
-    resultCount.textContent = '加载失败';
-  }
-
-  async function loadCatalog() {
-    showLoading();
-    try {
-      const response = await fetch('./catalog.json', { cache: 'no-cache' });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const raw = await response.json();
-      voices = normalizeCatalog(raw);
-      bases = {
-        favorites: voices.slice().sort(compareFavorites),
-        label: voices.slice().sort(compareLabels),
-      };
-      state = 'ready';
-      statusLine.hidden = true;
-      errorBox.hidden = true;
-      applyView();
-    } catch (error) {
-      console.error('加载音色目录失败：', error);
-      showError();
-    }
-  }
-
-  function applyView() {
-    if (state !== 'ready') return;
-
-    const tokens = query.split(/\s+/).filter(Boolean);
-    const base = bases[activeSort];
-    view = tokens.length
-      ? base.filter((item) => tokens.every((token) => item.searchText.includes(token)))
-      : base;
-
-    renderedCount = 0;
-    grid.replaceChildren();
-
-    const catalogEmpty = voices.length === 0;
-    emptyBox.hidden = view.length !== 0;
-    emptyTitle.textContent = catalogEmpty && !query ? '音色目录暂无内容' : '没有找到匹配的音色';
-    emptyText.hidden = catalogEmpty && !query;
-
-    const countLabel = numberFormat.format(view.length);
-    resultCount.textContent = query ? `找到 ${countLabel} 个音色` : `共 ${countLabel} 个音色`;
-
-    renderNextPage();
-  }
-
-  function renderNextPage() {
-    if (renderedCount >= view.length) {
-      updateLoadMore();
-      return;
-    }
-
-    const next = view.slice(renderedCount, renderedCount + PAGE_SIZE);
-    const fragment = document.createDocumentFragment();
-    for (const item of next) {
-      fragment.appendChild(createCard(item));
-    }
-    grid.appendChild(fragment);
-    renderedCount += next.length;
-    updateLoadMore();
+    return chips.slice(0, limit || 5);
   }
 
   function updateLoadMore() {
-    const remaining = view.length - renderedCount;
+    const remaining = Math.max(0, total - offset);
     if (remaining <= 0) {
       loadMoreWrap.hidden = true;
       return;
@@ -190,29 +90,127 @@
     loadMoreButton.textContent = `加载更多（还有 ${numberFormat.format(remaining)} 个）`;
   }
 
+  async function loadPage(reset) {
+    if (!reset && loading) return;
+    const seq = ++requestSeq;
+    loading = true;
+    const start = reset ? 0 : offset;
+
+    if (reset) {
+      offset = 0;
+      total = 0;
+      state = 'loading';
+      grid.replaceChildren();
+      emptyBox.hidden = true;
+      errorBox.hidden = true;
+      loadMoreWrap.hidden = true;
+      statusLine.hidden = false;
+      statusLine.textContent = '正在加载音色目录…';
+      resultCount.textContent = '正在加载…';
+    }
+
+    const params = new URLSearchParams({
+      limit: String(PAGE_SIZE),
+      offset: String(start),
+      sort: activeSort,
+    });
+    if (query) params.set('q', query);
+    if (activeLanguage) params.set('lang', activeLanguage);
+    if (activeGender) params.set('gender', activeGender);
+
+    try {
+      const response = await fetch(`/v1/voices/catalog?${params.toString()}`, {
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      if (seq !== requestSeq) return;
+
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      total = Number(payload.total) || 0;
+      if (reset) grid.replaceChildren();
+      const fragment = document.createDocumentFragment();
+      for (const item of items) {
+        fragment.appendChild(createCard(item));
+      }
+      grid.appendChild(fragment);
+
+      const next = payload.next_offset;
+      offset = next === null || next === undefined ? start + items.length : Number(next);
+      state = 'ready';
+      statusLine.hidden = true;
+      errorBox.hidden = true;
+      emptyBox.hidden = total !== 0;
+
+      const filtered = Boolean(query || activeLanguage || activeGender);
+      emptyTitle.textContent = filtered ? '没有找到匹配的音色' : '音色目录暂无内容';
+      emptyText.hidden = !filtered;
+      resultCount.textContent = filtered
+        ? `找到 ${numberFormat.format(total)} 个音色`
+        : `共 ${numberFormat.format(total)} 个音色`;
+      updateLoadMore();
+
+      if (!reset && items.length) {
+        liveRegion.textContent = `已加载 ${numberFormat.format(items.length)} 个音色`;
+      }
+    } catch (error) {
+      if (seq !== requestSeq) return;
+      console.error('加载音色目录失败：', error);
+      if (reset) {
+        state = 'error';
+        grid.replaceChildren();
+        emptyBox.hidden = true;
+        loadMoreWrap.hidden = true;
+        statusLine.hidden = true;
+        errorText.textContent = '音色目录加载失败，请检查网络后重试。';
+        errorBox.hidden = false;
+        resultCount.textContent = '加载失败';
+      } else {
+        liveRegion.textContent = '加载更多失败，请重试';
+      }
+    } finally {
+      if (seq === requestSeq) loading = false;
+    }
+  }
+
+  function appendChips(container, item, limit) {
+    if (!container) return;
+    for (const tag of itemChips(item, limit)) {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = tag;
+      container.appendChild(chip);
+    }
+  }
+
   function createCard(item) {
     const card = cardTemplate.content.firstElementChild.cloneNode(true);
 
     const label = card.querySelector('.card-label');
-    label.textContent = item.label;
-    label.title = item.label;
+    label.textContent = item.label || item.name;
+    label.title = label.textContent;
 
-    const favorites = card.querySelector('.card-fav');
-    if (item.favorites === null) {
-      favorites.remove();
+    const favorites = Number(item.favorites) || 0;
+    const favBox = card.querySelector('.card-fav');
+    if (favorites > 0) {
+      const text = numberFormat.format(favorites);
+      favBox.querySelector('.fav-count').textContent = text;
+      favBox.title = `上游收藏 ${text}`;
     } else {
-      const text = numberFormat.format(item.favorites);
-      favorites.querySelector('.fav-count').textContent = text;
-      favorites.title = `收藏 ${text}`;
+      favBox.remove();
     }
 
+    appendChips(card.querySelector('.chips'), item, 4);
+
     const slug = card.querySelector('.slug');
-    slug.textContent = item.slug;
-    slug.title = item.slug;
+    slug.textContent = item.name;
+    slug.title = item.name;
 
     const copyButton = card.querySelector('.copy');
-    copyButton.dataset.slug = item.slug;
-    copyButton.setAttribute('aria-label', `复制音色名 ${item.slug}`);
+    copyButton.dataset.slug = item.name;
+    copyButton.setAttribute('aria-label', `复制音色名 ${item.name}`);
 
     const download = card.querySelector('.download');
     if (item.url) {
@@ -224,13 +222,74 @@
     return card;
   }
 
+  function createCommunityCard(item) {
+    const card = communityTemplate.content.firstElementChild.cloneNode(true);
+
+    const label = card.querySelector('.card-label');
+    label.textContent = item.label || item.name;
+    label.title = label.textContent;
+
+    const author = card.querySelector('.card-author');
+    author.textContent = item.author || '社区投稿';
+
+    const usesCount = Number(item.uses) || 0;
+    card.querySelector('.uses-count').textContent = numberFormat.format(usesCount);
+    card.querySelector('.card-uses').title = `被点歌 ${numberFormat.format(usesCount)} 次`;
+
+    appendChips(card.querySelector('.chips'), item, 6);
+
+    const slug = card.querySelector('.slug');
+    slug.textContent = item.name;
+    slug.title = item.name;
+
+    const copy = card.querySelector('.copy');
+    copy.dataset.slug = item.name;
+    copy.setAttribute('aria-label', `复制音色名 ${item.name}`);
+
+    return card;
+  }
+
+  function renderCommunity(items) {
+    communityGrid.replaceChildren();
+    if (!items.length) {
+      communitySection.hidden = true;
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    for (const item of items) {
+      fragment.appendChild(createCommunityCard(item));
+    }
+    communityGrid.appendChild(fragment);
+    communitySection.hidden = false;
+    communityStatus.hidden = true;
+  }
+
+  async function loadCommunity() {
+    communityStatus.hidden = false;
+    communityStatus.textContent = '正在加载社区公开音色…';
+    try {
+      const response = await fetch(
+        `/v1/voices/public?limit=24&sort=${encodeURIComponent(communitySort.value)}`,
+        { cache: 'no-store' }
+      );
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      renderCommunity(Array.isArray(payload.voices) ? payload.voices : []);
+    } catch (error) {
+      console.warn('加载社区公开音色失败：', error);
+      communitySection.hidden = true;
+    }
+  }
+
   function scheduleSearch() {
     clearTimeout(searchTimer);
-    searchTimer = window.setTimeout(() => {
+    searchTimer = window.setTimeout(async () => {
       const nextQuery = searchInput.value.trim().toLowerCase();
       if (nextQuery === query) return;
       query = nextQuery;
-      applyView();
+      await loadPage(true);
       revealResultsIfNeeded();
     }, SEARCH_DEBOUNCE_MS);
   }
@@ -290,13 +349,17 @@
     }, COPY_FEEDBACK_MS));
   }
 
-  grid.addEventListener('click', (event) => {
+  function handleCopyClick(event) {
+    const container = event.currentTarget;
     const target = event.target instanceof Element ? event.target.closest('.copy') : null;
-    if (!target || !grid.contains(target)) return;
+    if (!target || !container.contains(target)) return;
     const slug = target.dataset.slug;
     if (!slug) return;
     copyToClipboard(slug).then((succeeded) => showCopyFeedback(target, succeeded, slug));
-  });
+  }
+
+  grid.addEventListener('click', handleCopyClick);
+  communityGrid.addEventListener('click', handleCopyClick);
 
   searchInput.addEventListener('compositionstart', () => {
     composing = true;
@@ -311,22 +374,33 @@
     if (!composing) scheduleSearch();
   });
 
-  sortSelect.addEventListener('change', () => {
-    activeSort = sortSelect.value === 'label' ? 'label' : 'favorites';
-    applyView();
+  sortSelect.addEventListener('change', async () => {
+    activeSort = sortSelect.value;
+    await loadPage(true);
     revealResultsIfNeeded();
   });
 
-  loadMoreButton.addEventListener('click', () => {
-    const before = renderedCount;
-    renderNextPage();
-    const added = renderedCount - before;
-    if (added > 0) {
-      liveRegion.textContent = `已加载 ${numberFormat.format(added)} 个音色`;
-    }
+  filterLanguage.addEventListener('change', async () => {
+    activeLanguage = filterLanguage.value;
+    await loadPage(true);
+    revealResultsIfNeeded();
   });
 
-  retryButton.addEventListener('click', loadCatalog);
+  filterGender.addEventListener('change', async () => {
+    activeGender = filterGender.value;
+    await loadPage(true);
+    revealResultsIfNeeded();
+  });
 
-  loadCatalog();
+  communitySort.addEventListener('change', loadCommunity);
+
+  loadMoreButton.addEventListener('click', async () => {
+    await loadPage(false);
+    revealResultsIfNeeded();
+  });
+
+  retryButton.addEventListener('click', () => loadPage(true));
+
+  loadPage(true);
+  loadCommunity();
 })();

@@ -92,6 +92,7 @@ def test_llm_review_disabled_without_env(monkeypatch: MonkeyPatch) -> None:
 
 def test_request_records_roundtrip(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv(subs.REQUESTS_FILE_ENV, str(tmp_path / "requests.json"))
+    monkeypatch.setenv("SING_DB_PATH", str(tmp_path / "sing.db"))
     record = subs.build_request_record(
         request_id="vr-1",
         name="mine-1a2b",
@@ -107,7 +108,90 @@ def test_request_records_roundtrip(tmp_path: Path, monkeypatch: MonkeyPatch) -> 
     assert stored is not None
     assert stored["status"] == "approved"
     assert stored["flowbee_user"] == "alice"
+    assert stored["visibility"] == "private"
+    assert stored["tags"] == []
     assert subs.get_request("missing") is None
+
+
+def test_legacy_json_is_imported_into_sqlite(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    requests_file = tmp_path / "requests.json"
+    monkeypatch.setenv(subs.REQUESTS_FILE_ENV, str(requests_file))
+    monkeypatch.setenv("SING_DB_PATH", str(tmp_path / "sing.db"))
+    record = subs.build_request_record(
+        request_id="vr-legacy",
+        name="legacy-1a2b",
+        label="Legacy",
+        url="https://example.com/legacy.zip",
+        flowbee_user="alice",
+        source="upload",
+        approved=True,
+        reason="ok",
+        flowbee_uid=7,
+    )
+    requests_file.write_text(json.dumps({"vr-legacy": record}), encoding="utf-8")
+
+    stored = subs.get_request("vr-legacy")
+    assert stored is not None
+    assert stored["name"] == "legacy-1a2b"
+    assert [event["action"] for event in subs.list_events("vr-legacy")] == ["imported"]
+
+
+def test_multiple_rejected_records_share_empty_name(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SING_DB_PATH", str(tmp_path / "sing.db"))
+    monkeypatch.setenv(subs.REQUESTS_FILE_ENV, str(tmp_path / "requests.json"))
+    for request_id in ("vr-bad-1", "vr-bad-2"):
+        subs.save_request(
+            subs.build_request_record(
+                request_id=request_id,
+                name="",
+                label="Bad",
+                url="",
+                flowbee_user="alice",
+                source="upload",
+                approved=False,
+                reason="no",
+                flowbee_uid=7,
+            )
+        )
+    assert subs.get_request("vr-bad-1") is not None
+    assert subs.get_request("vr-bad-2") is not None
+
+
+def test_reconcile_whitelist_repairs_drift(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    voices = tmp_path / "voices.json"
+    monkeypatch.setenv("SING_VOICES_FILE", str(voices))
+    monkeypatch.setenv(subs.REQUESTS_FILE_ENV, str(tmp_path / "requests.json"))
+    monkeypatch.setenv("SING_DB_PATH", str(tmp_path / "sing.db"))
+    record = subs.build_request_record(
+        request_id="vr-drift",
+        name="drift-1a2b",
+        label="Drift",
+        url="https://example.com/drift.zip",
+        flowbee_user="alice",
+        source="upload",
+        approved=True,
+        reason="ok",
+        flowbee_uid=7,
+    )
+    subs.save_request(record)
+
+    subs.reconcile_whitelist()
+    data = json.loads(voices.read_text(encoding="utf-8"))
+    assert data["drift-1a2b"]["url"] == "https://example.com/drift.zip"
+
+    data["manual"] = {"label": "Manual", "url": "https://example.com/manual.zip"}
+    voices.write_text(json.dumps(data), encoding="utf-8")
+    subs.mark_deleted("vr-drift")
+    subs.reconcile_whitelist()
+    data = json.loads(voices.read_text(encoding="utf-8"))
+    assert "drift-1a2b" not in data
+    assert data["manual"]["url"] == "https://example.com/manual.zip"
 
 
 def test_add_voice_preserves_other_entries(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:

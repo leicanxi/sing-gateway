@@ -17,6 +17,36 @@
     deleted: '已删除',
   };
 
+  const LANGUAGE_LABEL = {
+    zh: '中文',
+    ja: '日语',
+    en: '英语',
+    ko: '韩语',
+    other: '其他',
+  };
+  const GENDER_LABEL = {
+    female: '女声',
+    male: '男声',
+    neutral: '中性',
+  };
+
+  function itemTags(item) {
+    const tags = [];
+    const language = LANGUAGE_LABEL[item.language];
+    if (language) tags.push(language);
+    const gender = GENDER_LABEL[item.gender];
+    if (gender) tags.push(gender);
+    for (const raw of item.tags || []) {
+      const tag = String(raw || '').trim();
+      if (tag && !tags.includes(tag)) tags.push(tag);
+    }
+    return tags.slice(0, 6);
+  }
+
+  function shareText(name) {
+    return `用音色 ${name} 唱一首《歌名》试试：/点歌 歌名 ${name}`;
+  }
+
   function formatTime(seconds) {
     if (!seconds) return '';
     try {
@@ -39,6 +69,7 @@
   }
 
   function copyText(text, button) {
+    const original = button.textContent || '复制';
     const write = async () => {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
@@ -56,9 +87,9 @@
     write()
       .then(() => {
         button.textContent = '已复制';
-        liveRegion.textContent = `已复制音色名 ${text}`;
+        liveRegion.textContent = `已复制：${text}`;
         window.setTimeout(() => {
-          button.textContent = '复制';
+          button.textContent = original;
         }, 1600);
       })
       .catch(() => {
@@ -93,6 +124,19 @@
     }
     main.appendChild(meta);
 
+    const tags = itemTags(item);
+    if (tags.length) {
+      const chips = document.createElement('p');
+      chips.className = 'chips';
+      for (const tag of tags) {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = tag;
+        chips.appendChild(chip);
+      }
+      main.appendChild(chips);
+    }
+
     if (item.status === 'approved' && item.name) {
       const nameRow = document.createElement('p');
       nameRow.className = 'result-name-row';
@@ -107,10 +151,27 @@
       copy.addEventListener('click', () => copyText(item.name, copy));
       nameRow.appendChild(copy);
       main.appendChild(nameRow);
+
       const usage = document.createElement('p');
       usage.className = 'voice-usage';
       usage.textContent = '用法：聊天里发「/点歌 歌名 音色名」。';
       main.appendChild(usage);
+
+      const isPublic = item.visibility === 'public';
+      const visibility = document.createElement('p');
+      visibility.className = 'visibility-row';
+      const state = document.createElement('span');
+      state.className = `visibility-state${isPublic ? ' is-public' : ''}`;
+      state.textContent = isPublic ? '已公开到广场' : '未公开';
+      const toggle = document.createElement('button');
+      toggle.className = 'toggle-button';
+      toggle.type = 'button';
+      toggle.textContent = isPublic ? '取消公开' : '公开到广场';
+      toggle.addEventListener('click', () =>
+        setVisibility(item, isPublic ? 'private' : 'public', toggle)
+      );
+      visibility.append(state, toggle);
+      main.appendChild(visibility);
     } else if (item.status === 'rejected' && item.reason) {
       const reason = document.createElement('p');
       reason.className = 'voice-reason';
@@ -122,6 +183,14 @@
 
     const actions = document.createElement('div');
     actions.className = 'voice-actions';
+    if (item.status === 'approved' && item.name) {
+      const share = document.createElement('button');
+      share.className = 'copy';
+      share.type = 'button';
+      share.textContent = '复制分享文案';
+      share.addEventListener('click', () => copyText(shareText(item.name), share));
+      actions.appendChild(share);
+    }
     const remove = document.createElement('button');
     remove.className = 'link-button danger';
     remove.type = 'button';
@@ -158,6 +227,34 @@
       button.disabled = false;
       loginBanner.hidden = false;
       loginBanner.textContent = '删除失败，请稍后重试。';
+    }
+  }
+
+  async function setVisibility(item, visibility, button) {
+    button.disabled = true;
+    const path = visibility === 'public' ? 'publish' : 'unpublish';
+    try {
+      const response = await fetch(
+        `/v1/voice-requests/${encodeURIComponent(item.id)}/${path}`,
+        { method: 'POST' }
+      );
+      if (response.status === 401) {
+        showAuthGate('登录已过期，请重新登录。');
+        return;
+      }
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        const detail = payload && payload.detail;
+        throw new Error(detail ? String(detail) : `HTTP ${response.status}`);
+      }
+      liveRegion.textContent =
+        visibility === 'public' ? `已公开音色 ${item.name}` : `已取消公开 ${item.name}`;
+      await loadMine();
+    } catch (error) {
+      console.error('切换公开状态失败：', error);
+      button.disabled = false;
+      loginBanner.hidden = false;
+      loginBanner.textContent = `操作失败：${error.message || '请稍后重试'}`;
     }
   }
 

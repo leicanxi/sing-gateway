@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,22 @@ from sing_gateway.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+_VOICE_DOWNLOAD_MARKER = "downloading voice model"
+_HTTP_STATUS_RE = re.compile(r"HTTP(?: Error)? (\d{3})")
+
+
+def _voice_download_status(error: str, logs: str) -> int | None:
+    """HTTP status when AICoverGen could not fetch the custom voice zip.
+
+    The model downloads ``custom_rvc_model_download_url`` with urllib before it
+    touches the song, so a dead or private link fails the prediction with a
+    bare ``HTTP Error 404/401`` that means nothing to end users.
+    """
+    if _VOICE_DOWNLOAD_MARKER not in logs.casefold():
+        return None
+    match = _HTTP_STATUS_RE.search(error) or _HTTP_STATUS_RE.search(logs[-1500:])
+    return int(match.group(1)) if match else None
 
 
 def _clamp_int(value: int, minimum: int, maximum: int) -> int:
@@ -110,13 +127,19 @@ def predict_cover(base_url: str, token: str, audio_url: str, cfg: SingConfig) ->
                     raise RuntimeError("replicate returned no output")
                 return str(url)
             if status in {"failed", "canceled"}:
-                logs = str(job.get("logs") or "")[-800:]
-                error = str(job.get("error") or f"prediction {status}: {logs}")
+                full_logs = str(job.get("logs") or "")
+                error = str(job.get("error") or f"prediction {status}: {full_logs[-800:]}")
                 if "out of bounds for axis 0" in error:
                     # The voice zip ships an empty faiss index (ntotal=0);
                     # relays would retry a 502 and burn quota for nothing.
                     raise ClientSongError(
                         "该音色的模型文件损坏（特征索引为空），暂时无法翻唱，换一个音色试试"
+                    ) from None
+                download_status = _voice_download_status(error, full_logs)
+                if download_status is not None:
+                    raise ClientSongError(
+                        f"该音色的模型文件无法下载（HTTP {download_status}），"
+                        "链接可能已失效或不可访问，请换一个音色"
                     ) from None
                 raise RuntimeError(error)
     raise RuntimeError("prediction timed out")
