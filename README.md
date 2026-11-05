@@ -502,7 +502,7 @@ config.
 ## AstrBot / other clients
 
 Ready-made AstrBot plugin:
-[`leicanxi/deepseek-sing-astrbot`](https://github.com/leicanxi/deepseek-sing-astrbot)
+[`leicanxi/astrbot_plugin_deepseek_sing`](https://github.com/leicanxi/astrbot_plugin_deepseek_sing)
 (config page supports FlowBee and self-hosted modes, voice list pull, and a
 self-managed whitelist file).
 
@@ -533,15 +533,25 @@ or plain text (`雨爱`). Plain text is treated as the song name.
   cost is $0.016–0.054 and the cache hit cost is near zero.
 
 
-## Voice plaza web (static site)
+## Voice plaza web
 
-The plaza frontend is a plain static site in
-[`web/voice-plaza/`](web/voice-plaza/) — catalog browser, self-service upload
-and account management pages, no build step. It calls the gateway same-origin
+The plaza frontend lives in [`web/voice-plaza/`](web/voice-plaza/): the catalog
+browser, the upload drawer and the account page are a Vite + React 19 app using
+HeroUI v3 (`dist/index.html` and `dist/account.html`). It calls the gateway same-origin
 (`/v1/voices` guide, `/v1/voices/catalog`, `/v1/voices/public`,
-`/v1/voice-requests*`, `/v1/auth/*`); deploy it to any static webroot fronting
-the gateway (the FlowBee host uses Caddy at
+`/v1/voice-requests*`, `/v1/auth/*`); deploy the built files to any static
+webroot fronting the gateway (the FlowBee host uses Caddy at
 `/opt/caddy/data/voice-models/`).
+
+```bash
+cd web/voice-plaza
+pnpm install
+pnpm dev     # local dev on :5173, /v1 proxied to 127.0.0.1:9001
+pnpm build   # dist/ — copy this to the webroot
+```
+
+Hashed files under `dist/assets/` can be cached immutably; serve `index.html`
+with a short cache.
 
 The gateway reads the catalog from `SING_VOICES_CATALOG_FILE` on its own host,
 so the old webroot `catalog.json` copy is no longer required by the frontend.

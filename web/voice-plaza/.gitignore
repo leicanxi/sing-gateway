@@ -1,1 +1,5 @@
 catalog.json
+node_modules/
+dist/
+# heroui-agents-md
+.heroui-docs/
