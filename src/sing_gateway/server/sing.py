@@ -125,10 +125,10 @@ class JobRequest(BaseModel):
     pitch_mode: str | None = None
     source: str = ""
     instrumental_volume: int | None = Field(
-        default=None, description="Instrumental gain in dB, -60 (muted) to 0"
+        default=None, description="Instrumental gain in dB, -60 (muted) to +12 (boosted)"
     )
     backup_vocals_volume: int | None = Field(
-        default=None, description="Backup-vocal gain in dB, -60 (muted) to 0"
+        default=None, description="Backup-vocal gain in dB, -60 (muted) to +12 (boosted)"
     )
 
 

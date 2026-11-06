@@ -13,9 +13,11 @@ PITCH_MODES = frozenset({"no-change", "male-to-female", "female-to-male"})
 MUSIC_SOURCES = frozenset({"bilibili", "netease"})
 # Mixing gains are dB offsets the cover model applies when remixing converted
 # vocals with the separated stems: 0 keeps a stem at source loudness, -60 mutes
-# it. Positive gains risk clipping and are not exposed.
+# it, positive values boost it. The model's schema has no bounds; +12 measured
+# clean through its output stage (peaks pinned at 0 dBFS, no flat-topped
+# samples), so that is the cap we expose.
 VOLUME_MIN = -60
-VOLUME_MAX = 0
+VOLUME_MAX = 12
 
 
 class ClientSongError(RuntimeError):

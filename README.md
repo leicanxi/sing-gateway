@@ -71,7 +71,7 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_PITCH` | `2` | Default semitone shift |
 | `SING_START` | `60` | Default clip start (seconds) |
 | `SING_DURATION` | `25` | Default clip length (5–120) |
-| `SING_INSTRUMENTAL_VOLUME` | `-60` | Default instrumental gain in dB, `-60` (muted) to `0`; payload `"instrumental_volume"` overrides per request |
+| `SING_INSTRUMENTAL_VOLUME` | `-60` | Default instrumental gain in dB, `-60` (muted) to `+12` (boosted); payload `"instrumental_volume"` overrides per request |
 | `SING_BACKUP_VOCALS_VOLUME` | `-60` | Default backup-vocal (harmony) gain in dB, same scale; payload `"backup_vocals_volume"` overrides per request |
 | `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili` or `netease` (payload `"source"` overrides per request) |
 | `SING_CACHE_TTL_HOURS` | `168` | Disk cache TTL |
@@ -234,10 +234,11 @@ Authorization: Bearer <SING_GATEWAY_TOKEN>
 {"song": "雨爱", "voice": "keine", "start": 60, "duration": 60}
 ```
 
-Optional mixing fields (dB gains, `-60` muted to `0` full): `"instrumental_volume"`
+Optional mixing fields (dB gains, `-60` muted to `+12` boosted): `"instrumental_volume"`
 keeps the original accompaniment under the converted vocal, `"backup_vocals_volume"`
 keeps the backing-harmony stem (also voice-converted). Both default to `-60`
-(vocals only); pass `0` for a full-band cover.
+(vocals only); pass `0` for a full-band cover, or a positive value (up to `+12`)
+to push that stem above its source level.
 
 ```json
 {"id": "job_...", "status": "queued", "stage": "queued", ...}

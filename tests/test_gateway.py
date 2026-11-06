@@ -225,9 +225,10 @@ def test_mixing_volume_env_payload_and_clamp(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.delenv("SING_BACKUP_VOCALS_VOLUME")
     assert sing._config({}).instrumental_volume == -60
     assert sing._config({}).backup_vocals_volume == -60
-    # Out-of-range values clamp instead of failing: positive gains would boost
-    # and deepen negatives just mute further.
-    assert sing._config({"instrumental_volume": "5"}).instrumental_volume == 0
+    # Out-of-range values clamp instead of failing: positives boost a stem up
+    # to +12, deeper negatives just mute further.
+    assert sing._config({"instrumental_volume": "5"}).instrumental_volume == 5
+    assert sing._config({"instrumental_volume": "99"}).instrumental_volume == 12
     assert sing._config({"instrumental_volume": "-99"}).instrumental_volume == -60
 
 
