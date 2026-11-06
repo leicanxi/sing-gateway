@@ -248,9 +248,9 @@ def _config(payload: dict[str, Any]) -> SingConfig:
         ),
         duration=_as_int(
             payload.get("duration"),
-            _as_int(os.environ.get("SING_DURATION"), 25, minimum=5, maximum=120),
+            _as_int(os.environ.get("SING_DURATION"), 25, minimum=5, maximum=600),
             minimum=5,
-            maximum=120,
+            maximum=600,
         ),
         instrumental_volume=_as_int(
             payload.get("instrumental_volume"),
@@ -281,7 +281,10 @@ def _config(payload: dict[str, Any]) -> SingConfig:
             os.environ.get("SING_CACHE_TTL_HOURS"), 168.0, minimum=0.0, maximum=8760.0
         ),
         cache_max_entries=_as_int(
-            os.environ.get("SING_CACHE_MAX_ENTRIES"), 50, minimum=0, maximum=500
+            os.environ.get("SING_CACHE_MAX_ENTRIES"), 50, minimum=0, maximum=5000
+        ),
+        prediction_timeout=_as_float(
+            os.environ.get("SING_PREDICTION_TIMEOUT"), 1800.0, minimum=60.0, maximum=3600.0
         ),
     )
 

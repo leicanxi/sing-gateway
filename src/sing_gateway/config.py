@@ -60,7 +60,7 @@ class SingConfig:
     protect: float = 0.33
     instrumental_volume: int = VOLUME_MIN
     backup_vocals_volume: int = VOLUME_MIN
-    prediction_timeout: float = 600.0
+    prediction_timeout: float = 1800.0
     cache_ttl_hours: float = 168.0
     cache_max_entries: int = 50
     cache_root: Path | None = None
