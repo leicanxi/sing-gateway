@@ -50,9 +50,7 @@ def _setup(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     monkeypatch.delenv("SING_VOICE_ALIASES_FILE", raising=False)
 
 
-def test_catalog_endpoint_search_alias_and_page(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_catalog_endpoint_search_alias_and_page(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     _setup(tmp_path, monkeypatch)
     response = _client().get("/v1/voices/catalog", params={"q": "初音", "limit": 1})
     assert response.status_code == 200
@@ -65,9 +63,7 @@ def test_catalog_endpoint_search_alias_and_page(
     assert body["next_offset"] is None
 
 
-def test_catalog_endpoint_filters_and_type_alias(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_catalog_endpoint_filters_and_type_alias(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     _setup(tmp_path, monkeypatch)
     english = _client().get("/v1/voices/catalog", params={"lang": "en"}).json()
     assert [item["name"] for item in english["items"]] == ["columbina"]
@@ -82,9 +78,11 @@ def test_catalog_endpoint_is_paginated(tmp_path: Path, monkeypatch: MonkeyPatch)
     assert first["total"] == 3
     assert len(first["items"]) == 2
     assert first["next_offset"] == 2
-    second = _client().get(
-        "/v1/voices/catalog", params={"sort": "label", "limit": 2, "offset": 2}
-    ).json()
+    second = (
+        _client()
+        .get("/v1/voices/catalog", params={"sort": "label", "limit": 2, "offset": 2})
+        .json()
+    )
     assert len(second["items"]) == 1
     assert second["next_offset"] is None
 

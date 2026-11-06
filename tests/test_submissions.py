@@ -113,9 +113,7 @@ def test_request_records_roundtrip(tmp_path: Path, monkeypatch: MonkeyPatch) -> 
     assert subs.get_request("missing") is None
 
 
-def test_legacy_json_is_imported_into_sqlite(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_legacy_json_is_imported_into_sqlite(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     requests_file = tmp_path / "requests.json"
     monkeypatch.setenv(subs.REQUESTS_FILE_ENV, str(requests_file))
     monkeypatch.setenv("SING_DB_PATH", str(tmp_path / "sing.db"))
@@ -161,9 +159,7 @@ def test_multiple_rejected_records_share_empty_name(
     assert subs.get_request("vr-bad-2") is not None
 
 
-def test_reconcile_whitelist_repairs_drift(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_reconcile_whitelist_repairs_drift(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     voices = tmp_path / "voices.json"
     monkeypatch.setenv("SING_VOICES_FILE", str(voices))
     monkeypatch.setenv(subs.REQUESTS_FILE_ENV, str(tmp_path / "requests.json"))

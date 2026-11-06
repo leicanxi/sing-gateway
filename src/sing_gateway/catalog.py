@@ -13,6 +13,7 @@ import json
 import os
 import re
 import urllib.parse
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -237,7 +238,7 @@ def _token_groups(query: str) -> list[list[str]]:
     return groups
 
 
-def _sort_key(sort: str, usage: dict[str, int]):
+def _sort_key(sort: str, usage: dict[str, int]) -> Callable[[dict[str, Any]], tuple[Any, ...]]:
     if sort == "hot":
         return lambda item: (
             -int(usage.get(item["name"], 0)),

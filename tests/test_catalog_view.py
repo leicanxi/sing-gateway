@@ -58,9 +58,7 @@ def test_derive_metadata_from_label() -> None:
     assert "乐器" in drums["tags"]
 
 
-def test_catalog_search_filter_and_pagination(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_catalog_search_filter_and_pagination(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     _write_catalog(tmp_path, monkeypatch)
 
     by_miku_alias = catalog.search_catalog(q="初音")
@@ -80,9 +78,7 @@ def test_catalog_search_filter_and_pagination(
     assert page["next_offset"] == 2
 
 
-def test_catalog_hot_sort_uses_usage_counts(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_catalog_hot_sort_uses_usage_counts(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     _write_catalog(tmp_path, monkeypatch)
     result = catalog.search_catalog(sort="hot", usage={"drums": 9})
     assert result["items"][0]["name"] == "drums"
@@ -98,9 +94,7 @@ def test_catalog_alias_prefix_matches_while_typing(
         assert [item["name"] for item in result["items"]][:1] == ["hatsune-miku"]
 
 
-def test_catalog_uses_sidecar_query_aliases(
-    tmp_path: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_catalog_uses_sidecar_query_aliases(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     _write_catalog(tmp_path, monkeypatch)
     aliases = tmp_path / "aliases.json"
     aliases.write_text(json.dumps({"原神": ["genshin"]}), encoding="utf-8")

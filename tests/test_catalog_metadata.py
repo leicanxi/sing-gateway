@@ -27,10 +27,7 @@ def test_sample_preview_url_prefers_female_and_encodes() -> None:
             "hasMale": True,
         }
     }
-    assert (
-        scraper.sample_preview_url(item)
-        == f"{scraper.SAMPLE_BASE_URL}samples2/abc%20def.mp3"
-    )
+    assert scraper.sample_preview_url(item) == f"{scraper.SAMPLE_BASE_URL}samples2/abc%20def.mp3"
 
 
 def test_sample_preview_url_male_and_unavailable() -> None:
@@ -47,9 +44,7 @@ def test_scrape_stores_preview_url(monkeypatch: MonkeyPatch) -> None:
 
     catalog, _ = scraper.scrape([], existing={})
 
-    assert catalog["some-voice-english"]["preview_url"].endswith(
-        "/samples2/sample-id.mp3"
-    )
+    assert catalog["some-voice-english"]["preview_url"].endswith("/samples2/sample-id.mp3")
 
 
 def test_scrape_adds_derived_metadata(monkeypatch: MonkeyPatch) -> None:

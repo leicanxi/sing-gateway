@@ -332,9 +332,7 @@ def upsert_request(record: dict[str, Any]) -> None:
 
 def get_request(request_id: str) -> dict[str, Any] | None:
     with connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM voice_requests WHERE id = ?", (request_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM voice_requests WHERE id = ?", (request_id,)).fetchone()
     return _row_to_record(row) if row else None
 
 
@@ -442,9 +440,7 @@ def mark_deleted(
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        row = conn.execute(
-            "SELECT * FROM voice_requests WHERE id = ?", (request_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM voice_requests WHERE id = ?", (request_id,)).fetchone()
     return _row_to_record(row) if row else None
 
 
@@ -498,9 +494,7 @@ def set_visibility(
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        row = conn.execute(
-            "SELECT * FROM voice_requests WHERE id = ?", (request_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM voice_requests WHERE id = ?", (request_id,)).fetchone()
     return _row_to_record(row) if row else None
 
 
@@ -549,9 +543,7 @@ def set_moderation(
         except Exception:
             conn.execute("ROLLBACK")
             raise
-        row = conn.execute(
-            "SELECT * FROM voice_requests WHERE id = ?", (request_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM voice_requests WHERE id = ?", (request_id,)).fetchone()
     return _row_to_record(row) if row else None
 
 
@@ -570,9 +562,7 @@ def increment_usage(name: str) -> int:
             """,
             (key, int(time.time())),
         )
-        row = conn.execute(
-            "SELECT uses FROM voice_stats WHERE name = ?", (key,)
-        ).fetchone()
+        row = conn.execute("SELECT uses FROM voice_stats WHERE name = ?", (key,)).fetchone()
     return int(row["uses"]) if row else 0
 
 
@@ -581,9 +571,7 @@ def get_usage(name: str) -> int:
     if not key:
         return 0
     with connect() as conn:
-        row = conn.execute(
-            "SELECT uses FROM voice_stats WHERE name = ?", (key,)
-        ).fetchone()
+        row = conn.execute("SELECT uses FROM voice_stats WHERE name = ?", (key,)).fetchone()
     return int(row["uses"]) if row else 0
 
 
