@@ -9,20 +9,22 @@ Deployed at `https://voice-models.flowbee.top` (Caddy serves the built files fro
   HeroUI v3 (Tailwind CSS v4). It reads `GET /v1/voices/catalog` (paged, with
   `q` / `lang` / `gender` / `sort`) and `GET /v1/voices/public`, keeps the active
   filters in the URL, and plays card previews through one shared `<audio>`.
-- **Upload is a dialog inside the app**, opened from the navbar (+ / avatar menu)
-  or with `/?upload=1`. It posts the same multipart request to
-  `POST /v1/voice-requests`. `public/upload.html` is only a compatibility redirect
-  to `/?upload=1` (the SSO `next` allowlist still names it).
+- **Upload is a dialog inside the app**, opened from the sidebar, the topbar
+  avatar menu, the mobile bottom bar or with `/?upload=1`. It posts the same
+  multipart request to `POST /v1/voice-requests`. `public/upload.html` is only a
+  compatibility redirect to `/?upload=1` (the SSO `next` allowlist still names it).
 - `account.html` + `src/account/` — "my voices" management, a second Vite entry
-  (`dist/account.html`). Same Navbar look, lists submissions from
-  `GET /v1/voice-requests/mine`.
+  (`dist/account.html`). It reuses the same `Sidebar` / `Topbar` / `MobileNav`
+  shell as the catalog, lists submissions from `GET /v1/voice-requests/mine`.
 - `public/` only holds `logo.png` and the `upload.html` compatibility redirect;
   everything else is built from `src/`.
 - `src/components/motion/` — two beUI blocks (`morphing-search`, `file-upload`) vendored
   via their shadcn-compatible registry (`https://beui.dev/r/<name>.json`) plus
-  `src/lib/{ease,utils,hooks}`. They were adapted to HeroUI tokens (`text-muted` instead
-  of `text-muted-foreground`, etc.). Extra deps: `motion`, `lucide-react`, `clsx`,
-  `tailwind-merge`. Re-pull the source from the registry before hand-editing.
+  `src/lib/{ease,utils,hooks}`. `file-upload` is still used; `morphing-search` is
+  kept as a reference after the inline-search redesign. They were adapted to HeroUI
+  tokens (`text-muted` instead of `text-muted-foreground`, etc.). Extra deps: `motion`,
+  `lucide-react`, `clsx`, `tailwind-merge`. Re-pull the source from the registry
+  before hand-editing.
 - `catalog.json` — legacy static copy of the scraped catalog. Not read by the
   browser, not part of the build (the gateway reads `SING_VOICES_CATALOG_FILE`
   on its own host).

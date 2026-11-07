@@ -1,18 +1,24 @@
 import { Avatar, Button, Dropdown, Label } from '@heroui/react';
+import { LogIn } from 'lucide-react';
 import type { Account } from '../lib/types';
 import { GuidePopover } from './GuidePopover';
-import { HelpIcon, LogInIcon, UploadIcon, UserIcon } from './icons';
+import {
+  FolderIcon,
+  GithubIcon,
+  HelpIcon,
+  UploadIcon,
+  UserIcon,
+} from './icons';
 
-export type TabKey = 'catalog' | 'community';
-
-type NavbarProps = {
+type TopbarProps = {
   account: Account | null;
   onOpenUpload: () => void;
+  label?: string;
 };
 
 type MenuAction = 'account' | 'upload' | 'login';
 
-export function Navbar({ account, onOpenUpload }: NavbarProps) {
+export function Topbar({ account, onOpenUpload, label = '音色广场' }: TopbarProps) {
   const displayName = account?.name || account?.username || '';
   const initial = displayName.trim().charAt(0).toUpperCase();
 
@@ -25,48 +31,60 @@ export function Navbar({ account, onOpenUpload }: NavbarProps) {
   };
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/70 backdrop-blur-xl">
-      <div className="mx-auto flex w-full max-w-[1120px] items-center gap-2 px-4 py-2.5 sm:px-6">
-        <div className="flex min-w-0 flex-1 items-center">
-          <a className="flex shrink-0 items-center" href="./">
-            <img
-              alt=""
-              className="h-9 w-auto"
-              height="36"
-              src="./logo-wordmark.png"
-              width="89"
-            />
-            <h1 className="sr-only">音色广场</h1>
-          </a>
-        </div>
+    <header className="sticky top-0 z-30 border-b border-border bg-background/85 backdrop-blur-xl">
+      <div className="flex h-14 items-center gap-3 px-4 sm:px-6 lg:px-8">
+        <a className="flex items-center lg:hidden" href="./">
+          <img
+            alt="音色广场"
+            className="h-7 w-auto"
+            height="28"
+            src="./logo-wordmark.png"
+            width="69"
+          />
+        </a>
 
-        <div className="flex flex-1 items-center justify-end gap-1.5">
+        <nav
+          aria-label="面包屑"
+          className="hidden items-center gap-1.5 text-[13px] lg:flex"
+        >
+          <FolderIcon className="size-4 text-muted" />
+          <a className="text-muted transition-colors hover:text-foreground" href="./">
+            应用
+          </a>
+          <span aria-hidden="true" className="text-muted/40">
+            /
+          </span>
+          <span className="font-medium text-foreground">{label}</span>
+        </nav>
+
+        <div className="ml-auto flex items-center gap-1">
+          <a
+            aria-label="GitHub 源码"
+            className="hidden size-9 place-items-center rounded-full text-muted transition-colors hover:bg-surface-secondary hover:text-foreground sm:grid"
+            href="https://github.com/leicanxi/sing-gateway"
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            <GithubIcon className="size-4" />
+          </a>
+
           <GuidePopover
             trigger={
               <Button
                 aria-label="使用说明"
-                className="h-9 gap-1.5 rounded-full bg-default px-2.5 text-[12.5px] text-foreground/80 hover:bg-default/70 hover:text-foreground md:px-3"
+                className="h-9 gap-1.5 rounded-full px-2.5 text-[13px] text-muted hover:bg-surface-secondary hover:text-foreground"
                 variant="ghost"
               >
-                <HelpIcon className="size-3.5" />
-                <span className="hidden md:inline">使用说明</span>
+                <HelpIcon className="size-4" />
+                <span className="hidden lg:inline">使用说明</span>
               </Button>
             }
           />
 
-          <Button
-            aria-label="上传音色"
-            className="h-9 gap-1.5 rounded-full px-3 text-[12.5px]"
-            onPress={onOpenUpload}
-          >
-            <UploadIcon className="size-3.5" />
-            <span className="hidden sm:inline">上传音色</span>
-          </Button>
-
           <Dropdown>
             <Button
               aria-label="账号菜单"
-              className="h-9 min-w-0 rounded-full border border-border bg-surface p-0.5"
+              className="ml-1 h-9 min-w-0 rounded-full border border-border bg-surface p-0.5"
               variant="ghost"
             >
               <Avatar className="size-8">
@@ -85,17 +103,17 @@ export function Navbar({ account, onOpenUpload }: NavbarProps) {
               <Dropdown.Menu onAction={(key) => onMenuAction(key as MenuAction)}>
                 {account ? (
                   <Dropdown.Item id="account" textValue="我的音色">
-                    <UserIcon className="size-3.5 text-muted" />
+                    <UserIcon className="size-4 text-muted" />
                     <Label>我的音色</Label>
                   </Dropdown.Item>
                 ) : (
                   <Dropdown.Item id="login" textValue="登录 FlowBee">
-                    <LogInIcon className="size-3.5 text-muted" />
+                    <LogIn className="size-4 text-muted" strokeWidth={1.75} />
                     <Label>登录 FlowBee</Label>
                   </Dropdown.Item>
                 )}
                 <Dropdown.Item id="upload" textValue="上传音色">
-                  <UploadIcon className="size-3.5 text-muted" />
+                  <UploadIcon className="size-4 text-muted" />
                   <Label>上传音色</Label>
                 </Dropdown.Item>
               </Dropdown.Menu>

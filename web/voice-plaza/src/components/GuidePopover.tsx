@@ -6,7 +6,7 @@ import { CheckIcon, CopyIcon, ExternalIcon, GithubIcon } from './icons';
 const STEPS: { title: string; text: ReactNode }[] = [
   {
     title: '挑一个音色',
-    text: '按热度、语言或声音筛选，卡片上的「试听」可以先听一段。',
+    text: '按语言或声音快速筛选，点头像上的播放键可以先听一段。',
   },
   {
     title: '复制音色名',
@@ -37,9 +37,9 @@ const PLUGINS = [
   {
     id: 'dsh',
     name: 'DSH 插件',
-    status: 'soon' as const,
-    repo: '',
-    install: '适配中，上线后给出仓库地址。',
+    status: 'ready' as const,
+    repo: 'https://github.com/leicanxi/dsh-sing',
+    install: '安装 dsh-sing，在 $DSH_HOME/sing.json 里填好网关地址即可。',
   },
 ];
 

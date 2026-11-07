@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Card, Chip, Skeleton } from '@heroui/react';
+import { LogIn } from 'lucide-react';
+import { MobileNav } from '../components/MobileNav';
+import { Sidebar } from '../components/Sidebar';
+import { Topbar } from '../components/Topbar';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { GENDER_LABEL, LANGUAGE_LABEL } from '../lib/constants';
 import type { Account } from '../lib/types';
-import { CheckIcon, CopyIcon, LogInIcon, UploadIcon } from '../components/icons';
+import { CheckIcon, CopyIcon, UploadIcon } from '../components/icons';
 
 type Submission = {
   id: string;
@@ -168,59 +172,58 @@ export function AccountPage() {
     setPhase('gate');
   };
 
+  const openUpload = () => {
+    window.location.href = './?upload=1';
+  };
+
+  const goToTab = (tab: 'catalog' | 'community') => {
+    window.location.href = tab === 'community' ? './?tab=community' : './';
+  };
+
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
-      <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 w-full max-w-[880px] items-center gap-2 px-4 sm:px-6">
-          <a className="flex items-center gap-2.5" href="./">
-            <img
-              alt="音色广场"
-              className="h-8 w-auto"
-              height="32"
-              src="./logo-wordmark.png"
-              width="79"
-            />
-          </a>
-          <span className="text-muted">/</span>
-          <span className="text-[13px] text-muted">我的音色</span>
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              className="h-9 gap-1.5 rounded-full"
-              onPress={() => {
-                window.location.href = './?upload=1';
-              }}
-              size="sm"
-            >
-              <UploadIcon className="size-3.5" />
-              上传音色
-            </Button>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-dvh bg-background">
+      <Sidebar active="account" onOpenUpload={openUpload} onSelect={goToTab} />
 
-      <main className="mx-auto w-full max-w-[880px] flex-1 px-4 py-6 sm:px-6">
-        <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="text-[22px] font-semibold tracking-[-0.02em]">我的音色</h1>
-            <p className="mt-1 text-[12.5px] text-muted">
-              审核通过的音色可以用名字点歌，也可以公开到广场。
-            </p>
-          </div>
-          {me && (
-            <p className="text-[12px] text-muted">
-              {me.name || me.username}
-              <span className="mx-1.5 text-muted/40">·</span>
-              <button
-                className="text-accent hover:underline"
-                onClick={() => void logout()}
-                type="button"
-              >
-                退出登录
-              </button>
-            </p>
-          )}
-        </div>
+      <div className="flex min-h-dvh flex-col lg:pl-[220px]">
+        <Topbar account={me} label="我的音色" onOpenUpload={openUpload} />
 
+        <main className="flex-1">
+          <div className="mx-auto w-full max-w-[1228px] px-4 pt-6 pb-28 sm:px-6 lg:px-8 lg:pb-16">
+            <header className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h1 className="text-2xl font-semibold tracking-[-0.02em]">
+                  我的音色
+                </h1>
+                <p className="mt-1 text-[13px] text-muted">
+                  审核通过的音色可以用名字点歌，也可以公开到广场。
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                {me && (
+                  <p className="text-[12px] text-muted">
+                    {me.name || me.username}
+                    <span className="mx-1.5 text-muted/40">·</span>
+                    <button
+                      className="text-accent hover:underline"
+                      onClick={() => void logout()}
+                      type="button"
+                    >
+                      退出登录
+                    </button>
+                  </p>
+                )}
+                <button
+                  className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-foreground px-4 text-[13px] font-medium text-background transition-colors hover:bg-foreground/85 focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:outline-none"
+                  onClick={openUpload}
+                  type="button"
+                >
+                  <UploadIcon className="size-4" />
+                  上传音色
+                </button>
+              </div>
+            </header>
+
+            <div className="mt-6 max-w-[900px]">
         {notice && (
           <p className="mb-4 rounded-xl border border-danger/25 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">
             {notice}
@@ -237,12 +240,12 @@ export function AccountPage() {
             </Card.Header>
             <Card.Footer>
               <Button
-                className="gap-1.5"
+                className="gap-1.5 !bg-foreground !text-background hover:!bg-foreground/85"
                 onPress={() => {
                   window.location.href = '/v1/auth/login?next=/account.html';
                 }}
               >
-                <LogInIcon className="size-4" />
+                <LogIn className="size-4" strokeWidth={1.75} />
                 使用 FlowBee 账号登录
               </Button>
             </Card.Footer>
@@ -286,10 +289,8 @@ export function AccountPage() {
               上传自己的 RVC 模型，审核通过后会生成一个专属音色名。
             </p>
             <Button
-              className="mt-4 gap-1.5"
-              onPress={() => {
-                window.location.href = './?upload=1';
-              }}
+              className="mt-4 gap-1.5 !bg-foreground !text-background hover:!bg-foreground/85"
+              onPress={openUpload}
               size="sm"
             >
               <UploadIcon className="size-3.5" />
@@ -396,6 +397,11 @@ export function AccountPage() {
                       <div>
                         {approved && (
                           <Button
+                            className={
+                              isPublic
+                                ? undefined
+                                : '!bg-foreground !text-background hover:!bg-foreground/85'
+                            }
                             isDisabled={busy}
                             onPress={() => void toggleVisibility(item)}
                             size="sm"
@@ -441,14 +447,19 @@ export function AccountPage() {
             })}
           </ul>
         )}
-      </main>
+            </div>
+          </div>
+        </main>
 
-      <footer className="border-t border-border">
-        <div className="mx-auto w-full max-w-[880px] px-4 py-6 text-[11.5px] leading-relaxed text-muted/80 sm:px-6">
-          音色模型来自社区公开分享，版权归原作者所有；如有侵权请联系删除。本站以
-          AGPL-3.0-or-later 发布。
-        </div>
-      </footer>
+        <footer className="border-t border-border">
+          <div className="mx-auto w-full max-w-[1228px] px-4 py-6 text-[11.5px] leading-relaxed text-muted/80 sm:px-6 lg:px-8">
+            音色模型来自社区公开分享，版权归原作者所有；如有侵权请联系删除。本站以
+            AGPL-3.0-or-later 发布。
+          </div>
+        </footer>
+      </div>
+
+      <MobileNav active="account" onOpenUpload={openUpload} onSelect={goToTab} />
     </div>
   );
 }

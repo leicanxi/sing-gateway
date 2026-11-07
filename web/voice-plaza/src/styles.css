@@ -1,10 +1,32 @@
 @import "tailwindcss";
 @import "@heroui/styles";
 
+/*
+ * Warm plaza palette. HeroUI ships cool neutral tokens; the plaza background is
+ * #faf9f5, so every neutral and shadow tint is nudged toward warm grey.
+ */
+:root,
+.light,
+[data-theme='light'] {
+  --background: #fdfcfa;
+  --surface: #ffffff;
+  --surface-secondary: #f6f2ec;
+  --surface-tertiary: #f1ebe2;
+  --default: #f3efe8;
+  --border: #e8e1d6;
+  --surface-shadow:
+    0 2px 4px 0 rgb(92 74 54 / 0.035), 0 1px 2px 0 rgb(92 74 54 / 0.05),
+    0 0 1px 0 rgb(92 74 54 / 0.055);
+  --overlay-shadow:
+    0 2px 8px 0 rgb(92 74 54 / 0.04), 0 -6px 12px 0 rgb(92 74 54 / 0.02),
+    0 14px 28px 0 rgb(92 74 54 / 0.08);
+  --field-shadow: 0 1px 2px 0 rgb(92 74 54 / 0.04);
+}
+
 @theme {
-  --font-sans: "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue",
-    Arial, sans-serif;
+  --font-sans: "Inter", "Noto Sans SC", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
 }
@@ -35,9 +57,38 @@ body {
     @apply bg-surface font-medium text-foreground shadow-sm;
   }
 
+  /* Sidebar and mobile navigation share one row treatment. */
+  .nav-item {
+    @apply flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[13.5px] font-medium text-muted transition-colors hover:bg-surface-secondary hover:text-foreground;
+  }
+
+  .nav-item[data-active="true"] {
+    @apply bg-surface-secondary text-foreground;
+  }
+
+  .nav-item:focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--accent) 50%, transparent);
+    outline-offset: 2px;
+  }
+
+  .section-label {
+    @apply flex h-8 items-center px-2 text-[11px] font-medium text-muted/70;
+  }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none !important;
+    width: 0;
+    height: 0;
+  }
+
   /* HeroUI sizes .select__value itself (text-sm/400); match the toolbar pills. */
   .chip-select .select__value {
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 500;
   }
 
@@ -52,63 +103,26 @@ body {
   .card-link {
     @apply inline-flex items-center gap-1 rounded text-[11.5px] text-muted transition-colors duration-150 hover:text-accent;
   }
+}
 
-  .card-hover {
-    @apply transition-transform duration-200;
+/* Floating marketing card entrance. */
+.pass-card {
+  animation: pass-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes pass-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
   }
-
-  /* HeroUI cards already carry shadow-surface: lift only, no second shadow. */
-  .card-hover:hover {
-    transform: translateY(-2px);
-  }
-}
-
-/* Copy / play feedback: a short equalizer while a preview is playing. */
-.eq {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 1.5px;
-  height: 11px;
-}
-
-.eq i {
-  display: block;
-  width: 2px;
-  height: 100%;
-  border-radius: 1px;
-  background: currentColor;
-  transform-origin: bottom;
-  animation: eq-bounce 900ms ease-in-out infinite;
-}
-
-.eq i:nth-child(1) {
-  animation-delay: -240ms;
-}
-
-.eq i:nth-child(2) {
-  animation-delay: -120ms;
-}
-
-.eq i:nth-child(3) {
-  animation-delay: 0ms;
-}
-
-@keyframes eq-bounce {
-  0%,
-  100% {
-    transform: scaleY(0.35);
-  }
-  50% {
-    transform: scaleY(1);
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .eq i {
-    animation: none !important;
-  }
-
-  .card-hover:hover {
-    transform: none;
+  .pass-card {
+    animation: none;
   }
 }

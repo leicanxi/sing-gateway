@@ -24,3 +24,7 @@ export type SortKey = 'hot' | 'favorites' | 'new' | 'label';
 export type CommunitySortKey = 'new' | 'hot';
 
 export type Account = { name?: string; username?: string };
+
+export type TabKey = 'catalog' | 'community';
+
+export type SidebarPage = TabKey | 'account';

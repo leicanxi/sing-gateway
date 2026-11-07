@@ -20,6 +20,21 @@ export const GENDER_LABEL: Record<string, string> = {
   neutral: '中性',
 };
 
+/** Small colour dot shown before a language chip, so the row scans faster. */
+export const LANGUAGE_DOT: Record<string, string> = {
+  zh: '#e5484d',
+  ja: '#d6409f',
+  en: '#3e63dd',
+  ko: '#8e4ec6',
+  es: '#f76b15',
+  fr: '#0091ff',
+  de: '#6e7681',
+  ru: '#7c5cff',
+  pt: '#12a594',
+  it: '#30a46c',
+  other: '#8b8d98',
+};
+
 export type Option = { value: string; label: string };
 
 export const SORT_OPTIONS: Option[] = [
@@ -58,21 +73,25 @@ export const GENDER_VALUES = GENDER_OPTIONS.map((option) => option.value).filter
   (value) => value !== 'all',
 );
 
-export type VoiceChip = { label: string; accent?: boolean };
+export type VoiceChip = { label: string; accent?: boolean; dot?: string };
 
 /** Chips are ordered so the categorical metadata comes first, then tags. */
 export function voiceChips(voice: Voice, limit = 4): VoiceChip[] {
   const chips: VoiceChip[] = [];
   const seen = new Set<string>();
-  const push = (label: string, accent = false) => {
+  const push = (label: string, accent = false, dot?: string) => {
     const value = label.trim();
     if (!value || seen.has(value)) return;
     seen.add(value);
-    chips.push({ label: value, accent });
+    chips.push({ label: value, accent, dot });
   };
 
   if (voice.language) {
-    push(LANGUAGE_LABEL[voice.language] ?? '', true);
+    push(
+      LANGUAGE_LABEL[voice.language] ?? '',
+      true,
+      LANGUAGE_DOT[voice.language],
+    );
   }
   if (voice.gender) push(GENDER_LABEL[voice.gender] ?? '');
   if (voice.type === 'instrumental') push('乐器');

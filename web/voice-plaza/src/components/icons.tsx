@@ -152,6 +152,60 @@ export function ChevronDownIcon(props: IconProps) {
   );
 }
 
+export function ChevronLeftIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m9.5 4.5-3.5 3.5 3.5 3.5" />
+    </Icon>
+  );
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m6.5 4.5 3.5 3.5-3.5 3.5" />
+    </Icon>
+  );
+}
+
+export function GridIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect height="4.6" rx="1.1" width="4.6" x="2.6" y="2.6" />
+      <rect height="4.6" rx="1.1" width="4.6" x="8.8" y="2.6" />
+      <rect height="4.6" rx="1.1" width="4.6" x="2.6" y="8.8" />
+      <rect height="4.6" rx="1.1" width="4.6" x="8.8" y="8.8" />
+    </Icon>
+  );
+}
+
+export function UsersIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="6" cy="5.4" r="2.4" />
+      <path d="M1.9 12.8c.55-2 2.2-3.1 4.1-3.1s3.55 1.1 4.1 3.1" />
+      <path d="M10.4 3.4a2.3 2.3 0 0 1 0 4.4M12 9.9c1.2.45 2 1.45 2.4 2.9" />
+    </Icon>
+  );
+}
+
+export function FolderIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M2.4 4.6c0-.6.5-1.1 1.1-1.1h2.6l1.4 1.6h4.9c.6 0 1.1.5 1.1 1.1v5.6c0 .6-.5 1.1-1.1 1.1H3.5c-.6 0-1.1-.5-1.1-1.1z" />
+    </Icon>
+  );
+}
+
+export function BookIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M2.6 3.2h3.2c.8 0 1.5.4 2.2 1 .7-.6 1.4-1 2.2-1h3.2v9.6H10c-.8 0-1.5.4-2.2 1-.7-.6-1.4-1-2.2-1H2.6z" />
+      <path d="M8 4.2v9.6" />
+    </Icon>
+  );
+}
+
 export function GithubIcon(props: IconProps) {
   return (
     <svg

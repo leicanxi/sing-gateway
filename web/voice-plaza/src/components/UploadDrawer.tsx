@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { LogIn } from 'lucide-react';
 import {
   Button,
   Input,
@@ -272,10 +273,12 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
                     登录后提交的音色会绑定到你的账号，可以在「我的音色」里查看状态、复制音色名或公开到广场。
                   </p>
                   <Button
+                    className="gap-1.5 !bg-foreground !text-background hover:!bg-foreground/85"
                     onPress={() => {
                       window.location.href = '/v1/auth/login?next=/upload.html';
                     }}
                   >
+                    <LogIn className="size-4" strokeWidth={1.75} />
                     使用 FlowBee 账号登录
                   </Button>
                 </div>
@@ -308,6 +311,7 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
                           </span>
                         ) : (
                           <Button
+                            className="!bg-foreground !text-background hover:!bg-foreground/85"
                             isPending={publishing}
                             onPress={publish}
                             size="sm"
@@ -495,9 +499,9 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
             {!result && account && (
               <Drawer.Footer>
                 <Button
+                  className="gap-1.5 !bg-foreground !text-background hover:!bg-foreground/85"
                   isDisabled={submitting}
                   onPress={submit}
-                  className="gap-1.5"
                 >
                   <UploadIcon className="size-3.5" />
                   {submitting ? '提交中…' : '提交审核'}
