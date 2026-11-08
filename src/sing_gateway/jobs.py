@@ -23,6 +23,7 @@ MAX_CONCURRENCY = max(1, int(os.environ.get("SING_MAX_CONCURRENCY", "2")))
 _DEDUPE_FIELDS = (
     "song",
     "url",
+    "artist",
     "voice",
     "start",
     "duration",
@@ -106,6 +107,10 @@ class JobManager:
                     "cached": bool(job.result.get("cached")),
                 }
             )
+            if int(job.result.get("pitch") or 0):
+                data["pitch"] = int(job.result.get("pitch") or 0)
+            if job.result.get("pitch_auto"):
+                data["pitch_auto"] = True
         return data
 
     async def _run(self, job: Job) -> None:

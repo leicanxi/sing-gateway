@@ -10,6 +10,9 @@ DEFAULT_VOICE_URL = "https://huggingface.co/leicanxi/rvc-models/resolve/main/kei
 DEFAULT_REPLICATE_BASE = "https://api.replicate.com/v1"
 DEFAULT_MODEL = "zsxkib/realistic-voice-cloning"
 PITCH_MODES = frozenset({"no-change", "male-to-female", "female-to-male"})
+# Not a model value: the gateway resolves it to semitones from the song's
+# artist and the chosen voice, then sends the model a plain key shift.
+AUTO_PITCH_MODE = "auto"
 MUSIC_SOURCES = frozenset({"bilibili", "netease"})
 # Mixing gains are dB offsets the cover model applies when remixing converted
 # vocals with the separated stems: 0 keeps a stem at source loudness, -60 mutes
@@ -62,6 +65,10 @@ class SingConfig:
     protect: float = 0.33
     instrumental_volume: int = VOLUME_MIN
     backup_vocals_volume: int = VOLUME_MIN
+    # Gender of the selected voice ("male"/"female") and the label shown to the
+    # gender classifier, used by pitch_mode=auto.
+    voice_label: str = ""
+    voice_gender: str = ""
     prediction_timeout: float = 600.0
     cache_ttl_hours: float = 168.0
     cache_max_entries: int = 50
@@ -76,6 +83,10 @@ class SingResult:
     title: str = ""
     artist: str = ""
     duration_seconds: int = 0
+    # Whole-mix semitone shift that was baked into this render, and whether it
+    # came from pitch_mode=auto rather than from the caller.
+    pitch: int = 0
+    pitch_auto: bool = False
 
     def as_block(self) -> dict[str, Any]:
         block: dict[str, Any] = {
@@ -93,4 +104,8 @@ class SingResult:
             block["title"] = self.title
         if self.artist:
             block["artist"] = self.artist
+        if self.pitch:
+            block["pitch"] = self.pitch
+        if self.pitch_auto:
+            block["pitch_auto"] = True
         return block

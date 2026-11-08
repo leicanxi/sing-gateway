@@ -186,7 +186,9 @@ def test_render_song_by_query_labels_the_picked_song(monkeypatch: MonkeyPatch) -
     picked = _candidate(1, "稻香")
     monkeypatch.setattr(service, "_pick_candidate", lambda song, cfg: picked)
     monkeypatch.setattr(
-        service, "render_song", lambda url, cfg: SingResult("https://cdn/a.mp3", "a.mp3")
+        service,
+        "render_song",
+        lambda url, cfg, artist="": SingResult("https://cdn/a.mp3", "a.mp3"),
     )
     result = service.render_song_by_query("稻香", SingConfig(music_source="netease"))
     assert result.audio_url == "https://cdn/a.mp3"

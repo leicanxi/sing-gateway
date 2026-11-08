@@ -11,8 +11,9 @@ from pathlib import Path
 
 import httpx
 
-from sing_gateway import bilibili, cache, media, netease, replicate
+from sing_gateway import bilibili, cache, media, netease, pitch, replicate
 from sing_gateway.config import (
+    AUTO_PITCH_MODE,
     MUSIC_SOURCES,
     PITCH_MODES,
     VOLUME_MAX,
@@ -38,12 +39,15 @@ _INSTRUMENTAL_TITLE_HINTS = (
 
 
 def _normalized(cfg: SingConfig) -> SingConfig:
+    mode = cfg.pitch_mode if cfg.pitch_mode in PITCH_MODES else "no-change"
+    if cfg.pitch_mode == AUTO_PITCH_MODE:
+        mode = AUTO_PITCH_MODE
     return replace(
         cfg,
         start=max(0, min(3600, int(cfg.start))),
         duration=max(5, min(120, int(cfg.duration))),
         pitch=max(-24, min(24, int(cfg.pitch))),
-        pitch_mode=cfg.pitch_mode if cfg.pitch_mode in PITCH_MODES else "no-change",
+        pitch_mode=mode,
         music_source=cfg.music_source if cfg.music_source in MUSIC_SOURCES else "bilibili",
         index_rate=max(0.0, min(1.0, float(cfg.index_rate))),
         filter_radius=max(0, min(7, int(cfg.filter_radius))),
@@ -86,13 +90,27 @@ def search_songs(query: str, limit: int = 3, source: str = "bilibili") -> list[S
     return bilibili.search_bilibili(query, limit)
 
 
-def render_song(url: str, cfg: SingConfig) -> SingResult:
+def render_song(url: str, cfg: SingConfig, artist: str = "") -> SingResult:
     """Generate one short cover for an already-resolved Bilibili/audio URL.
 
     Cache hits only re-upload the cached mp3 to Replicate Files, so they return
     a fresh public URL in about a second without running the model.
     """
     cfg = _normalized(cfg)
+    pitch_auto = False
+    if cfg.pitch_mode == AUTO_PITCH_MODE:
+        semitones, pitch_auto = pitch.resolve_pitch(
+            artist, cfg.voice_label, cfg.voice_gender, cfg.pitch
+        )
+        # Resolve to a concrete whole-mix shift: the model never sees "auto".
+        cfg = replace(cfg, pitch=semitones, pitch_mode="no-change")
+        logger.info(
+            "auto pitch %+d semitones (artist=%r, voice=%r, resolved=%s)",
+            semitones,
+            artist,
+            cfg.voice_label,
+            pitch_auto,
+        )
     token = _resolve_token(cfg)
     base_url = cfg.replicate_base_url.rstrip("/")
     root = cache.cache_root(cfg)
@@ -111,6 +129,8 @@ def render_song(url: str, cfg: SingConfig) -> SingResult:
                 str(meta.get("filename") or "cover.mp3"),
                 True,
                 duration_seconds=int(meta.get("duration_seconds") or cfg.duration),
+                pitch=cfg.pitch,
+                pitch_auto=pitch_auto,
             )
         logger.info("sing cache entry has no playable url; regenerating %s", key)
         audio.unlink(missing_ok=True)
@@ -127,7 +147,7 @@ def render_song(url: str, cfg: SingConfig) -> SingResult:
         if total > 0:
             start = min(start, max(0, int(total) - cfg.duration - 1))
             clip_seconds = min(cfg.duration, max(0, int(total) - start)) or cfg.duration
-        clip = workdir / "clip.mp3"
+        clip = workdir / "clip.wav"
         media.trim_audio(source, clip, start, cfg.duration)
         audio_url = replicate.upload_file(base_url, token, clip)
         output_url = replicate.predict_cover(base_url, token, audio_url, cfg)
@@ -149,7 +169,14 @@ def render_song(url: str, cfg: SingConfig) -> SingResult:
             logger.warning("sing cache store failed", exc_info=True)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
-    return SingResult(output_url, filename, cached=False, duration_seconds=clip_seconds)
+    return SingResult(
+        output_url,
+        filename,
+        cached=False,
+        duration_seconds=clip_seconds,
+        pitch=cfg.pitch,
+        pitch_auto=pitch_auto,
+    )
 
 
 def _pick_candidate(song: str, cfg: SingConfig) -> SongCandidate:
@@ -202,5 +229,7 @@ def _pick_candidate(song: str, cfg: SingConfig) -> SongCandidate:
 def render_song_by_query(song: str, cfg: SingConfig) -> SingResult:
     """Search for *song* and generate a cover from the best-matching result."""
     candidate = _pick_candidate(song, cfg)
+    # The artist doubles as the pitch_mode=auto source-gender hint.
+    result = render_song(candidate.url, cfg, artist=candidate.artist)
     # Carry the picked title/artist so clients can show which version was used.
-    return replace(render_song(candidate.url, cfg), title=candidate.title, artist=candidate.artist)
+    return replace(result, title=candidate.title, artist=candidate.artist)

@@ -33,7 +33,13 @@ def upload_file(base_url: str, token: str, path: Path) -> str:
         response = client.post(
             f"{base_url}/files",
             headers={"Authorization": f"Bearer {token}"},
-            files={"content": (path.name, handle, "audio/mpeg")},
+            files={
+                "content": (
+                    path.name,
+                    handle,
+                    "audio/wav" if path.suffix.lower() == ".wav" else "audio/mpeg",
+                )
+            },
         )
     response.raise_for_status()
     url = (response.json().get("urls") or {}).get("get")
@@ -66,12 +72,17 @@ def predict_cover(base_url: str, token: str, audio_url: str, cfg: SingConfig) ->
     timeout = float(cfg.prediction_timeout)
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     pitch_mode = cfg.pitch_mode if cfg.pitch_mode in PITCH_MODES else "no-change"
+    # AICoverGen transposes vocals-only for pitch_change and the whole mix for
+    # pitch_change_all. Sending the octave through pitch_change would leave the
+    # accompaniment in the old key, so fold both into one whole-mix shift.
+    octaves = {"male-to-female": 1, "female-to-male": -1}.get(pitch_mode, 0)
+    total_pitch = _clamp_int(cfg.pitch + octaves * 12, -24, 24)
     payload_input = {
         "song_input": audio_url,
         "rvc_model": "CUSTOM",
         "custom_rvc_model_download_url": cfg.voice_model_url,
-        "pitch_change": pitch_mode,
-        "pitch_change_all": _clamp_int(cfg.pitch, -24, 24),
+        "pitch_change": "no-change",
+        "pitch_change_all": total_pitch,
         "index_rate": _clamp_float(cfg.index_rate, 0.0, 1.0),
         "filter_radius": _clamp_int(cfg.filter_radius, 0, 7),
         "rms_mix_rate": _clamp_float(cfg.rms_mix_rate, 0.0, 1.0),
@@ -83,6 +94,10 @@ def predict_cover(base_url: str, token: str, audio_url: str, cfg: SingConfig) ->
         "reverb_wetness": 0.0,
         "reverb_dryness": 1.0,
         "reverb_damping": 0.7,
+        # AICoverGen exports mp3 without a bitrate (ffmpeg's 128 kbps default)
+        # and only exposes wav as the alternative. Wav URLs are ~10 MB per
+        # minute and QQ voice/file sends fail on them, so delivery stays mp3.
+        # Raising this ceiling needs our own inference pipeline.
         "output_format": "mp3",
     }
     with httpx.Client(timeout=120.0, headers=headers) as client:

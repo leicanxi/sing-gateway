@@ -46,7 +46,7 @@ from sing_gateway import (
     resolve_voice,
     search_songs,
 )
-from sing_gateway.config import VOLUME_MAX, VOLUME_MIN
+from sing_gateway.config import AUTO_PITCH_MODE, VOLUME_MAX, VOLUME_MIN
 from sing_gateway.jobs import JobManager
 from sing_gateway.server.sso import (
     DEFAULT_NEXT,
@@ -118,10 +118,12 @@ class JobRequest(BaseModel):
     model: str = _DEFAULT_MODEL
     song: str = ""
     url: str = ""
+    # Optional: lets pitch_mode=auto classify a direct URL without searching.
+    artist: str = ""
     voice: str = ""
     start: int | None = None
     duration: int | None = None
-    pitch: int | None = None
+    pitch: int | str | None = None
     pitch_mode: str | None = None
     source: str = ""
     instrumental_volume: int | None = Field(
@@ -176,7 +178,8 @@ def _request_payload(body: ChatCompletionRequest) -> dict[str, Any]:
     return {"song": content}
 
 
-def _voice_url(payload: dict[str, Any]) -> str:
+def _voice_selection(payload: dict[str, Any]) -> tuple[str, str, str]:
+    """Return ``(model_url, label, gender)`` for the requested voice."""
     requested = str(payload.get("voice") or "").strip()
     if requested:
         spec = resolve_voice(requested)
@@ -190,29 +193,35 @@ def _voice_url(payload: dict[str, Any]) -> str:
                     f"{plaza_url()}, then pass its name as voice"
                 ),
             )
-        return spec.url
+        return spec.url, spec.label, spec.gender
     configured = os.environ.get("SING_VOICE_URL", "").strip()
     if configured:
-        return configured
+        return configured, "", ""
     spec = resolve_voice("")
     if spec is None:
         raise HTTPException(status_code=503, detail="no voice model is configured")
-    return spec.url
+    return spec.url, spec.label, spec.gender
 
 
 def _config(payload: dict[str, Any]) -> SingConfig:
+    voice_url, voice_label, voice_gender = _voice_selection(payload)
+    default_pitch = _as_int(os.environ.get("SING_PITCH"), 2, minimum=-24, maximum=24)
+    raw_mode = str(payload.get("pitch_mode") or "").strip().lower()
+    raw_pitch = payload.get("pitch")
+    auto_pitch = (
+        raw_mode == AUTO_PITCH_MODE or str(raw_pitch or "").strip().lower() == AUTO_PITCH_MODE
+    )
     return SingConfig(
-        voice_model_url=_voice_url(payload),
+        voice_model_url=voice_url,
+        voice_label=voice_label,
+        voice_gender=voice_gender,
         model=os.environ.get("SING_REPLICATE_MODEL", "zsxkib/realistic-voice-cloning"),
         model_version=os.environ.get("SING_REPLICATE_VERSION", ""),
         replicate_base_url=os.environ.get("SING_REPLICATE_BASE_URL", DEFAULT_REPLICATE_BASE),
-        pitch=_as_int(
-            payload.get("pitch"),
-            _as_int(os.environ.get("SING_PITCH"), 2, minimum=-24, maximum=24),
-            minimum=-24,
-            maximum=24,
-        ),
-        pitch_mode=str(payload.get("pitch_mode") or "no-change"),
+        pitch=default_pitch
+        if auto_pitch
+        else _as_int(raw_pitch, default_pitch, minimum=-24, maximum=24),
+        pitch_mode=AUTO_PITCH_MODE if auto_pitch else (raw_mode or "no-change"),
         start=_as_int(
             payload.get("start"),
             _as_int(os.environ.get("SING_START"), 60, minimum=0, maximum=3600),
@@ -263,8 +272,9 @@ def _render(payload: dict[str, Any]) -> dict[str, Any]:
     config = _config(payload)
     url = str(payload.get("url") or "").strip()
     song = str(payload.get("song") or "").strip()
+    artist = str(payload.get("artist") or "").strip()
     if url:
-        result = render_song(url, config)
+        result = render_song(url, config, artist=artist)
     elif song:
         result = render_song_by_query(song, config)
     else:

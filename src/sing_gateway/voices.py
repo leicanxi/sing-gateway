@@ -53,6 +53,9 @@ class VoiceSpec:
     name: str
     label: str
     url: str
+    # "male"/"female" when the entry declares it; auto pitch uses it to decide
+    # whether a cover needs an octave shift.
+    gender: str = ""
 
 
 def _home() -> Path:
@@ -87,6 +90,16 @@ def _default_voices() -> dict[str, VoiceSpec]:
     }
 
 
+def normalize_gender(value: Any) -> str:
+    """Map the spellings people actually write into ``male``/``female``."""
+    text = str(value or "").strip().lower()
+    if text in {"male", "m", "男", "男性", "男生"}:
+        return "male"
+    if text in {"female", "f", "女", "女性", "女生"}:
+        return "female"
+    return ""
+
+
 def _parse_entry(name: str, value: Any) -> VoiceSpec | None:
     if isinstance(value, str) and value.strip():
         return VoiceSpec(name=name, label=name, url=value.strip())
@@ -95,7 +108,9 @@ def _parse_entry(name: str, value: Any) -> VoiceSpec | None:
         if not url:
             return None
         label = str(value.get("label") or name).strip() or name
-        return VoiceSpec(name=name, label=label, url=url)
+        return VoiceSpec(
+            name=name, label=label, url=url, gender=normalize_gender(value.get("gender"))
+        )
     return None
 
 

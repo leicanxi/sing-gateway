@@ -71,6 +71,10 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_PITCH` | `2` | Default semitone shift |
 | `SING_START` | `60` | Default clip start (seconds) |
 | `SING_DURATION` | `25` | Default clip length (5–120) |
+| `SING_GENDER_CACHE_FILE` | `~/.octop/sing-gender-cache.json` | Artist/voice genders for `pitch_mode=auto`; hand-editable, LLM verdicts are cached here |
+| `SING_GENDER_LLM_BASE_URL` | falls back to `SING_REVIEW_BASE_URL` | Optional chat model that classifies unknown artists/voices |
+| `SING_GENDER_LLM_API_KEY` | falls back to `SING_REVIEW_API_KEY` | Key for that model |
+| `SING_GENDER_LLM_MODEL` | falls back to `SING_REVIEW_MODEL` | Model name (default `deepseek-chat`) |
 | `SING_INSTRUMENTAL_VOLUME` | `-60` | Default instrumental gain in dB, `-60` (muted) to `+12` (boosted); payload `"instrumental_volume"` overrides per request |
 | `SING_BACKUP_VOCALS_VOLUME` | `-60` | Default backup-vocal (harmony) gain in dB, same scale; payload `"backup_vocals_volume"` overrides per request |
 | `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili` or `netease` (payload `"source"` overrides per request) |
@@ -84,6 +88,38 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_BILI_COOKIES` | — | Path to a Netscape `cookies.txt` for Bilibili (see HTTP 412 below) |
 | `SING_PROXY` | — | Optional proxy (`http://host:port`) for Bilibili search/download |
 | `SING_NCM_API` | — | Base URL of a running ncm-api sidecar (see below); unlocks VIP tracks |
+
+### Key selection (`pitch_mode=auto`)
+
+Passing `"pitch_mode": "auto"` makes the gateway choose the key instead of
+asking the caller for semitones. It compares the gender of the song's artist
+with the gender of the chosen voice:
+
+| Artist | Voice | Shift |
+|--------|-------|-------|
+| male | female | `+12` |
+| female | male | `-12` |
+| same | same | `0` |
+
+The shift is applied to the **whole mix** — vocals and accompaniment — so the
+cover stays in key. That is also what an explicit `pitch_mode=male-to-female`
+or `female-to-male` now does: the octave is folded into one key shift instead
+of transposing the vocal alone (which used to leave the instrumental in the old
+key). `pitch_mode=no-change` plus an integer `pitch` keeps the old behaviour
+when callers care.
+
+Genders are resolved in this order, cheapest first:
+
+1. `gender` on the voice entry in the voices JSON (`"male"`/`"female"`, also
+   accepts `男`/`女`);
+2. `SING_GENDER_CACHE_FILE` — a small JSON you can edit by hand:
+   `{"artists": {"杨丞琳": "female"}, "voices": {"keine": "female"}}`;
+3. an optional chat model (`SING_GENDER_LLM_*`, or the review model), called at
+   most once per artist/voice and then cached in that file.
+
+If either gender is unknown the render still runs with the normal
+`SING_PITCH` fallback, so auto mode never fails a request. The response block
+reports the shift it used as `pitch` and sets `pitch_auto: true`.
 
 ### Bilibili HTTP 412
 
@@ -142,7 +178,8 @@ shared by the gateway and its client plugins:
 {
   "keine": {
     "label": "Keine",
-    "url": "https://huggingface.co/leicanxi/rvc-models/resolve/main/keine_genso_flat.zip"
+    "url": "https://huggingface.co/leicanxi/rvc-models/resolve/main/keine_genso_flat.zip",
+    "gender": "female"
   },
   "cirno": {
     "label": "Cirno",
@@ -151,7 +188,10 @@ shared by the gateway and its client plugins:
 }
 ```
 
-A plain string value (`"keine": "https://..."`) is accepted as the URL.
+A plain string value (`"keine": "https://..."`) is accepted as the URL. The
+optional `gender` field feeds [`pitch_mode=auto`](#key-selection-pitch_modeauto);
+when it is missing the gateway falls back to the gender cache and then to the
+optional classifier.
 
 **Public catalog** — machine-scraped community models, browsable on the voice
 plaza and selectable by name:
@@ -240,6 +280,12 @@ keeps the backing-harmony stem (also voice-converted). Both default to `-60`
 (vocals only); pass `0` for a full-band cover, or a positive value (up to `+12`)
 to push that stem above its source level.
 
+Key fields: `"pitch"` (semitones) and `"pitch_mode"` (`no-change`,
+`male-to-female`, `female-to-male`, or `auto` — see
+[Key selection](#key-selection-pitch_modeauto)). With `"song"` the gateway
+already knows the artist; with a direct `"url"` you can pass `"artist"` so auto
+mode has a source gender to compare against.
+
 ```json
 {"id": "job_...", "status": "queued", "stage": "queued", ...}
 ```
@@ -258,15 +304,18 @@ GET /sing/v1/jobs/job_...
   "title": "雨爱",
   "artist": "杨丞琳",
   "duration_seconds": 60,
-  "cached": true
+  "cached": true,
+  "pitch": 12,
+  "pitch_auto": true
 }
 ```
 
 - Statuses: `queued`, `running`, `succeeded`, `failed` (`failed` carries
   `error`). Clients poll every few seconds; `SING_JOB_TTL_SECONDS` keeps
   finished rows around for late polls.
-- Identical submissions share one job (same song/url + voice + start/duration +
-  pitch mode + mixing gains), so double-clicks and retries do not re-render.
+- Identical submissions share one job (same song/url + artist + voice +
+  start/duration + pitch mode + mixing gains), so double-clicks and retries do
+  not re-render.
 - Only `SING_MAX_CONCURRENCY` renders run at once; the rest wait in `queued`.
 - `duration_seconds` is the actual clip length (a VIP preview can be shorter
   than the requested duration) and `cached` marks a disk-cache hit. Both let a
@@ -475,6 +524,12 @@ or plain text (`雨爱`). Plain text is treated as the song name.
   user; a 502 would burn channel retries and end in a misleading
   "no channel available" error.
 
+- The clip sent to Replicate is cut to lossless WAV, so RVC never hears a second
+  mp3 generation. The *returned* file is still the model's own mp3:
+  AICoverGen exports mp3 without a bitrate (ffmpeg's 128 kbps default) and only
+  offers WAV as an alternative, whose ~10 MB/minute URLs are too large for QQ
+  voice/file sends. Raising that ceiling means running our own inference
+  pipeline instead of `zsxkib/realistic-voice-cloning`.
 - Returned audio URLs are Replicate delivery URLs (public), so QQ can fetch
   them directly. Cache hits return the original public delivery URL stored in
   the cache entry (validated with a HEAD request; stale or pre-upgrade entries

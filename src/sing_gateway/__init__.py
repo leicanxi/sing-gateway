@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from sing_gateway.config import (
+    AUTO_PITCH_MODE,
     DEFAULT_MODEL,
     DEFAULT_REPLICATE_BASE,
     DEFAULT_VOICE_URL,
@@ -24,6 +25,7 @@ from sing_gateway.voices import (
 )
 
 __all__ = [
+    "AUTO_PITCH_MODE",
     "DEFAULT_MODEL",
     "DEFAULT_REPLICATE_BASE",
     "DEFAULT_VOICE_URL",
