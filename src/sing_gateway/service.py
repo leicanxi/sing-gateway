@@ -45,7 +45,7 @@ def _normalized(cfg: SingConfig) -> SingConfig:
     return replace(
         cfg,
         start=max(0, min(3600, int(cfg.start))),
-        duration=max(5, min(120, int(cfg.duration))),
+        duration=max(5, min(600, int(cfg.duration))),
         pitch=max(-24, min(24, int(cfg.pitch))),
         pitch_mode=mode,
         music_source=cfg.music_source if cfg.music_source in MUSIC_SOURCES else "bilibili",
@@ -57,7 +57,7 @@ def _normalized(cfg: SingConfig) -> SingConfig:
         backup_vocals_volume=max(VOLUME_MIN, min(VOLUME_MAX, int(cfg.backup_vocals_volume))),
         prediction_timeout=max(30.0, float(cfg.prediction_timeout)),
         cache_ttl_hours=max(0.0, float(cfg.cache_ttl_hours)),
-        cache_max_entries=max(0, min(500, int(cfg.cache_max_entries))),
+        cache_max_entries=max(0, min(5000, int(cfg.cache_max_entries))),
     )
 
 

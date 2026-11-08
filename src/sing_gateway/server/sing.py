@@ -19,6 +19,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import tempfile
@@ -46,6 +47,7 @@ from sing_gateway import (
     resolve_voice,
     search_songs,
 )
+from sing_gateway.catalog import search_catalog
 from sing_gateway.config import AUTO_PITCH_MODE, VOLUME_MAX, VOLUME_MIN
 from sing_gateway.jobs import JobManager
 from sing_gateway.server.sso import (
@@ -67,20 +69,28 @@ from sing_gateway.server.sso import (
     verify_sso_ticket,
 )
 from sing_gateway.submissions import (
+    StateError,
+    add_event,
     add_voice,
     build_request_record,
     generate_name,
     get_request,
     hf_delete,
     hf_upload,
-    list_requests,
+    increment_usage,
+    list_public_voices,
+    list_requests_by_uid,
     llm_review,
     mark_deleted,
     modelscope_delete,
     modelscope_upload,
     new_request_id,
+    reconcile_whitelist,
     review_archive,
     save_request,
+    set_moderation,
+    set_visibility,
+    usage_map,
 )
 from sing_gateway.voices import remove_voice
 
@@ -132,6 +142,11 @@ class JobRequest(BaseModel):
     backup_vocals_volume: int | None = Field(
         default=None, description="Backup-vocal gain in dB, -60 (muted) to +12 (boosted)"
     )
+
+
+class ModerationRequest(BaseModel):
+    moderation: str = "ok"
+    reason: str = ""
 
 
 def _gateway_token() -> str:
@@ -203,6 +218,18 @@ def _voice_selection(payload: dict[str, Any]) -> tuple[str, str, str]:
     return spec.url, spec.label, spec.gender
 
 
+def _resolved_voice_name(payload: dict[str, Any]) -> str:
+    """The catalog/whitelist name behind this request, for usage counters."""
+    requested = str(payload.get("voice") or "").strip()
+    if requested:
+        spec = resolve_voice(requested)
+        return spec.name if spec is not None else ""
+    if os.environ.get("SING_VOICE_URL", "").strip():
+        return ""
+    spec = resolve_voice("")
+    return spec.name if spec is not None else ""
+
+
 def _config(payload: dict[str, Any]) -> SingConfig:
     voice_url, voice_label, voice_gender = _voice_selection(payload)
     default_pitch = _as_int(os.environ.get("SING_PITCH"), 2, minimum=-24, maximum=24)
@@ -230,9 +257,9 @@ def _config(payload: dict[str, Any]) -> SingConfig:
         ),
         duration=_as_int(
             payload.get("duration"),
-            _as_int(os.environ.get("SING_DURATION"), 25, minimum=5, maximum=120),
+            _as_int(os.environ.get("SING_DURATION"), 25, minimum=5, maximum=600),
             minimum=5,
-            maximum=120,
+            maximum=600,
         ),
         instrumental_volume=_as_int(
             payload.get("instrumental_volume"),
@@ -263,13 +290,17 @@ def _config(payload: dict[str, Any]) -> SingConfig:
             os.environ.get("SING_CACHE_TTL_HOURS"), 168.0, minimum=0.0, maximum=8760.0
         ),
         cache_max_entries=_as_int(
-            os.environ.get("SING_CACHE_MAX_ENTRIES"), 50, minimum=0, maximum=500
+            os.environ.get("SING_CACHE_MAX_ENTRIES"), 50, minimum=0, maximum=5000
+        ),
+        prediction_timeout=_as_float(
+            os.environ.get("SING_PREDICTION_TIMEOUT"), 1800.0, minimum=60.0, maximum=3600.0
         ),
     )
 
 
 def _render(payload: dict[str, Any]) -> dict[str, Any]:
     config = _config(payload)
+    voice_name = _resolved_voice_name(payload)
     url = str(payload.get("url") or "").strip()
     song = str(payload.get("song") or "").strip()
     artist = str(payload.get("artist") or "").strip()
@@ -279,6 +310,11 @@ def _render(payload: dict[str, Any]) -> dict[str, Any]:
         result = render_song_by_query(song, config)
     else:
         raise HTTPException(status_code=400, detail="url or song is required")
+    if voice_name:
+        try:
+            increment_usage(voice_name)
+        except Exception:  # noqa: BLE001 - counters must never break a render
+            logger.warning("voice usage counter failed", exc_info=True)
     return result.as_block()
 
 
@@ -498,6 +534,39 @@ def _max_upload_mb() -> int:
     return _as_int(os.environ.get("SING_UPLOAD_MAX_MB"), 300, minimum=1, maximum=2048)
 
 
+_LANGUAGE_VALUES = frozenset({"zh", "ja", "en", "ko", "other", "unknown"})
+_GENDER_VALUES = frozenset({"female", "male", "neutral", "unknown"})
+_RVC_VALUES = frozenset({"v1", "v2", "unknown"})
+_TAG_SPLIT_RE = re.compile(r"[,，、\s]+")
+
+
+def _choice(value: Any, allowed: frozenset[str]) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in allowed else ""
+
+
+def _parse_tags(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        raw = [str(item) for item in value]
+    else:
+        raw = _TAG_SPLIT_RE.split(str(value or ""))
+    tags: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        tag = " ".join(str(item).replace("#", " ").split()).strip()
+        if not tag:
+            continue
+        tag = tag[:16]
+        key = tag.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        tags.append(tag)
+        if len(tags) >= 8:
+            break
+    return tags
+
+
 def _client_ip(request: Request) -> str:
     forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
     if forwarded:
@@ -676,11 +745,21 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
     content_type = (request.headers.get("content-type") or "").lower()
     label = ""
     source_url = ""
+    tags_value: Any = []
+    language = ""
+    gender = ""
+    rvc_version = ""
+    description = ""
     upload: UploadFile | None = None
     if content_type.startswith("multipart/form-data"):
         form = await request.form()
         label = str(form.get("label") or "").strip()
         source_url = str(form.get("url") or "").strip()
+        tags_value = form.get("tags") or []
+        language = str(form.get("language") or "")
+        gender = str(form.get("gender") or "")
+        rvc_version = str(form.get("rvc_version") or "")
+        description = str(form.get("description") or "")
         candidate = form.get("file")
         if isinstance(candidate, UploadFile) and candidate.filename:
             upload = candidate
@@ -695,7 +774,17 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
         label = str(body.get("label") or "").strip()
         source_url = str(body.get("url") or "").strip()
+        tags_value = body.get("tags") or []
+        language = str(body.get("language") or "")
+        gender = str(body.get("gender") or "")
+        rvc_version = str(body.get("rvc_version") or "")
+        description = str(body.get("description") or "")
     label = " ".join(label.split())[:80]
+    tags = _parse_tags(tags_value)
+    language = _choice(language, _LANGUAGE_VALUES)
+    gender = _choice(gender, _GENDER_VALUES)
+    rvc_version = _choice(rvc_version, _RVC_VALUES)
+    description = " ".join(description.split())[:500]
     if not label:
         raise HTTPException(status_code=400, detail="请填写音色显示名")
     if upload is None and not source_url:
@@ -738,14 +827,34 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
         approved=bool(result["approved"]),
         reason=str(result["reason"]),
         flowbee_uid=identity.uid,
+        tags=tags,
+        language=language,
+        gender=gender,
+        rvc_version=rvc_version,
+        description=description,
     )
     await asyncio.to_thread(save_request, record)
+    await asyncio.to_thread(
+        add_event,
+        request_id,
+        record["name"],
+        record["status"],
+        actor_uid=identity.uid,
+        actor_role="system",
+        reason=record["reason"],
+    )
     return {
         "id": request_id,
         "status": record["status"],
         "label": label,
         "name": result["name"],
         "reason": result["reason"],
+        "tags": tags,
+        "language": language,
+        "gender": gender,
+        "rvc_version": rvc_version,
+        "description": description,
+        "visibility": record["visibility"],
         "status_path": f"/v1/voice-requests/{request_id}",
     }
 
@@ -831,13 +940,58 @@ def auth_logout(request: Request) -> JSONResponse:
 @app.get("/v1/voice-requests/mine")
 def my_voice_requests(request: Request) -> dict[str, Any]:
     identity = require_identity(request)
-    items = [
-        record
-        for record in list_requests()
-        if record.get("flowbee_uid") == identity.uid and record.get("status") != "deleted"
-    ]
-    items.sort(key=lambda item: int(item.get("created_at") or 0), reverse=True)
-    return {"submissions": items}
+    return {"submissions": list_requests_by_uid(identity.uid)}
+
+
+def _set_publish_state(request: Request, request_id: str, visibility: str) -> dict[str, Any]:
+    identity = require_identity(request)
+    check_origin(request)
+    record = get_request(request_id)
+    if record is None or record.get("flowbee_uid") != identity.uid:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    try:
+        updated = set_visibility(
+            request_id,
+            visibility,
+            actor_uid=identity.uid,
+            actor_role="user",
+        )
+    except StateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if updated is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return {"ok": True, "submission": updated}
+
+
+@app.post("/v1/voice-requests/{request_id}/publish")
+def publish_voice_request(request: Request, request_id: str) -> dict[str, Any]:
+    return _set_publish_state(request, request_id, "public")
+
+
+@app.post("/v1/voice-requests/{request_id}/unpublish")
+def unpublish_voice_request(request: Request, request_id: str) -> dict[str, Any]:
+    return _set_publish_state(request, request_id, "private")
+
+
+@app.post("/v1/voice-requests/{request_id}/moderate", dependencies=[Depends(_require_token)])
+def moderate_voice_request(request_id: str, body: ModerationRequest) -> dict[str, Any]:
+    record = get_request(request_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    try:
+        updated = set_moderation(
+            request_id,
+            body.moderation,
+            actor_role="admin",
+            reason=body.reason[:200],
+        )
+    except StateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if updated is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return {"ok": True, "submission": updated}
 
 
 @app.delete("/v1/voice-requests/{request_id}")
@@ -854,8 +1008,42 @@ def delete_voice_request(request: Request, request_id: str) -> dict[str, Any]:
         if remove_voice(name):
             logger.info("removed voice %s from whitelist", name)
         _delete_storage(record)
-    mark_deleted(request_id)
+    mark_deleted(request_id, actor_uid=identity.uid, actor_role="user")
     return {"ok": True, "name": name}
+
+
+@app.get("/v1/voices/public")
+def public_voices(
+    limit: int = Query(default=24, ge=1, le=100),
+    sort: str = Query(default="new"),
+) -> dict[str, Any]:
+    normalized = "hot" if sort.strip().lower() == "hot" else "new"
+    return {"voices": list_public_voices(limit=limit, sort=normalized)}
+
+
+@app.get("/v1/voices/catalog")
+def catalog_voices(
+    q: str = Query(default=""),
+    lang: str = Query(default=""),
+    gender: str = Query(default=""),
+    kind: str = Query(default="", alias="type"),
+    sort: str = Query(default="favorites"),
+    limit: int = Query(default=60, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    normalized = sort.strip().lower()
+    if normalized not in {"favorites", "label", "hot", "new"}:
+        normalized = "favorites"
+    return search_catalog(
+        q=q,
+        language=lang,
+        gender=gender,
+        kind=kind,
+        sort=normalized,
+        limit=limit,
+        offset=offset,
+        usage=usage_map(),
+    )
 
 
 @app.get("/v1/voice-requests/{request_id}")
@@ -867,6 +1055,10 @@ def voice_request_status(request_id: str) -> dict[str, Any]:
 
 
 def main() -> None:
+    try:
+        reconcile_whitelist()
+    except Exception:  # noqa: BLE001 - a failed repair must not stop the gateway
+        logger.warning("resolver whitelist reconciliation failed", exc_info=True)
     uvicorn.run(
         "sing_gateway.server.sing:app",
         host=os.environ.get("SING_GATEWAY_HOST", "127.0.0.1"),

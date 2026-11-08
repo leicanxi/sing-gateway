@@ -98,6 +98,26 @@ def test_resolve_pitch_falls_back_when_unknown() -> None:
     assert (semitones, resolved) == (2, False)
 
 
+def test_label_gender_beats_a_machine_verdict() -> None:
+    target = pitch.gender_cache_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps({"artists": {"band": "male"}, "voices": {"miku (female)": "male"}}),
+        encoding="utf-8",
+    )
+    # A cached/LLM verdict is a machine guess; the label word is deterministic.
+    assert pitch.label_gender("Miku (Female) (RVC V2)") == "female"
+    assert pitch.resolve_pitch("band", "Miku (Female)", "", 2) == (12, True)
+
+
+def test_declared_gender_beats_the_label() -> None:
+    target = pitch.gender_cache_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"artists": {"band": "male"}}), encoding="utf-8")
+    # The operator explicitly marked this voice male; the label says female.
+    assert pitch.resolve_pitch("band", "Some Voice (Female)", "male", 2) == (0, True)
+
+
 def test_gateway_maps_auto_pitch(monkeypatch: MonkeyPatch) -> None:
     from sing_gateway.server import sing
 

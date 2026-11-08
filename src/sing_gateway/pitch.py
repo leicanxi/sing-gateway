@@ -6,11 +6,12 @@ cross-gender cover moves one octave (male artist → female voice is +12, the
 reverse is -12). The gateway shifts the vocal and the accompaniment by the
 same amount, so the result stays in key instead of only transposing the singer.
 
-Genders come from three places, cheapest first:
+Genders come from four places, in trust order:
 
-1. the ``gender`` field of a voice entry in the voices JSON,
-2. ``SING_GENDER_CACHE_FILE`` (hand-editable; LLM verdicts are cached there),
-3. a chat model, when ``SING_GENDER_LLM_*`` or the review model is configured.
+1. the ``gender`` field of a voice entry in the voices JSON (authored by us),
+2. the gender word in the voice label (``voice_meta``), a deterministic guess,
+3. ``SING_GENDER_CACHE_FILE`` (hand-editable; LLM verdicts are cached there),
+4. a chat model, when ``SING_GENDER_LLM_*`` or the review model is configured.
 
 Anything unresolved falls back to the configured default pitch, so auto mode
 degrades to today's behaviour instead of failing a render.
@@ -28,6 +29,7 @@ from typing import Any
 
 import httpx
 
+from sing_gateway.voice_meta import derive_metadata
 from sing_gateway.voices import normalize_gender
 
 logger = logging.getLogger(__name__)
@@ -197,6 +199,11 @@ def voice_gender(label: str) -> str:
     return gender
 
 
+def label_gender(label: str) -> str:
+    """Gender spelled out in the label, e.g. ``... (RVC V2, Female)``."""
+    return normalize_gender(derive_metadata(label).get("gender"))
+
+
 def semitones_for(source: str, target: str) -> int | None:
     """Semitones that move a source-gender song into a target-gender voice."""
     if source not in _GENDERS or target not in _GENDERS:
@@ -217,7 +224,13 @@ def resolve_pitch(
     ``resolved`` is False when either gender is unknown; the caller then keeps
     the configured fallback pitch so behaviour is unchanged.
     """
-    target = normalize_gender(declared_voice_gender) or voice_gender(voice_label)
+    # Authored value first; the label guess is deterministic, so it beats a
+    # cached or LLM verdict, which are machine guesses too.
+    target = (
+        normalize_gender(declared_voice_gender)
+        or label_gender(voice_label)
+        or voice_gender(voice_label)
+    )
     semitones = semitones_for(artist_gender(artist), target)
     if semitones is None:
         return fallback, False
