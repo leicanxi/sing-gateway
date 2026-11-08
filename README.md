@@ -76,7 +76,7 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_GENDER_LLM_API_KEY` | falls back to `SING_REVIEW_API_KEY` | Key for that model |
 | `SING_GENDER_LLM_MODEL` | falls back to `SING_REVIEW_MODEL` | Model name (default `deepseek-chat`) |
 | `SING_INSTRUMENTAL_VOLUME` | `-60` | Default instrumental gain in dB, `-60` (muted) to `+12` (boosted); payload `"instrumental_volume"` overrides per request |
-| `SING_BACKUP_VOCALS_VOLUME` | `-60` | Default backup-vocal (harmony) gain in dB, same scale; payload `"backup_vocals_volume"` overrides per request |
+| `SING_BACKUP_VOCALS_VOLUME` | `-60` | Default backup-vocal (harmony) gain in dB, same scale; that stem keeps the original singer's voice; payload `"backup_vocals_volume"` overrides per request |
 | `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili` or `netease` (payload `"source"` overrides per request) |
 | `SING_CACHE_TTL_HOURS` | `168` | Disk cache TTL |
 | `SING_CACHE_MAX_ENTRIES` | `50` | Disk cache entries (up to 5000) |
@@ -285,9 +285,10 @@ Authorization: Bearer <SING_GATEWAY_TOKEN>
 
 Optional mixing fields (dB gains, `-60` muted to `+12` boosted): `"instrumental_volume"`
 keeps the original accompaniment under the converted vocal, `"backup_vocals_volume"`
-keeps the backing-harmony stem (also voice-converted). Both default to `-60`
-(vocals only); pass `0` for a full-band cover, or a positive value (up to `+12`)
-to push that stem above its source level.
+keeps the backing-harmony stem. Note that AICoverGen runs RVC on the main vocal
+only, so that stem is the **original singer's** harmony — turning it up mixes the
+two voices. Both default to `-60` (vocals only); pass `0` for a full-band cover,
+or a positive value (up to `+12`) to push that stem above its source level.
 
 Key fields: `"pitch"` (semitones) and `"pitch_mode"` (`no-change`,
 `male-to-female`, `female-to-male`, or `auto` — see
