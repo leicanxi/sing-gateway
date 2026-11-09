@@ -69,6 +69,16 @@ def test_title_match_score_ranks_plain_title_above_variants() -> None:
     assert netease.title_match_score("", "稻香") == 0.0
 
 
+def test_title_rank_key_breaks_case_ties() -> None:
+    from sing_gateway.titles import title_match_score, title_rank_key
+
+    # Scoring is casefolded: both spellings answer the query equally well.
+    assert title_match_score("GReeeeN", "GReeeeN") == title_match_score("GReeeeN", "greeeen")
+    # The tie-break then prefers the capitalisation the caller typed.
+    assert title_rank_key("GReeeeN", "GReeeeN") > title_rank_key("GReeeeN", "greeeen")
+    assert title_rank_key("greeeen", "greeeen") > title_rank_key("greeeen", "GReeeeN")
+
+
 def test_title_match_score_penalizes_re_recordings() -> None:
     # 深情版 / 女声版 are different arrangements; a plain or 原唱-labelled upload
     # is likelier to be the master the user asked for.

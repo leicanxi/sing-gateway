@@ -19,9 +19,16 @@ import httpx
 
 from sing_gateway import lrc
 from sing_gateway.config import ClientSongError, SongCandidate
-from sing_gateway.titles import title_match_score
+from sing_gateway.titles import title_match_score as _title_match_score
+from sing_gateway.titles import title_rank_key
 
 logger = logging.getLogger(__name__)
+
+
+def title_match_score(query: str, title: str) -> float:
+    """Compatibility alias for :func:`sing_gateway.titles.title_match_score`."""
+    return _title_match_score(query, title)
+
 
 SEARCH_URL = "https://music.163.com/api/search/get"
 PLAYER_URL = "https://music.163.com/api/song/enhance/player/url"
@@ -96,9 +103,9 @@ def search_netease(query: str, limit: int = 3) -> list[SongCandidate]:
                 url=f"https://music.163.com/song?id={song_id}",
             )
         )
-    # Best title match first; ``sort`` is stable, so hits NetEase considers
-    # equally relevant keep the order it returned them in.
-    candidates.sort(key=lambda candidate: -title_match_score(query, candidate.title))
+    # Best title match first, then the caller's capitalisation; ``sort`` is
+    # stable, so hits NetEase considers equally relevant keep its order.
+    candidates.sort(key=lambda candidate: title_rank_key(query, candidate.title), reverse=True)
     return candidates
 
 

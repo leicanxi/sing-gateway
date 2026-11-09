@@ -21,7 +21,11 @@ _VARIANT_RE = re.compile(
 
 
 def normalized_title(value: str) -> str:
-    return _TITLE_NOISE_RE.sub("", value or "").casefold()
+    return _stripped(value).casefold()
+
+
+def _stripped(value: str) -> str:
+    return _TITLE_NOISE_RE.sub("", value or "")
 
 
 def title_match_score(query: str, title: str) -> float:
@@ -43,3 +47,16 @@ def title_match_score(query: str, title: str) -> float:
     else:
         base = 0.2
     return max(0.1, base - 0.2) if _VARIANT_RE.search(found) else base
+
+
+def title_rank_key(query: str, title: str) -> tuple[float, int]:
+    """Sort key for search hits: similarity, then exact capitalisation.
+
+    Scoring is casefolded so a plainly typed query still matches the official
+    stylisation. When two different songs differ only in case (``GReeeeN`` vs
+    ``greeeen``) both reach 1.0; the caller's own capitalisation then decides,
+    because the source's order alone cannot tell them apart.
+    """
+    wanted = _stripped(query)
+    styled_match = int(bool(wanted) and wanted == _stripped(title))
+    return title_match_score(query, title), styled_match

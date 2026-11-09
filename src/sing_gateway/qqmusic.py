@@ -21,7 +21,7 @@ import httpx
 
 from sing_gateway import lrc
 from sing_gateway.config import ClientSongError, SongCandidate
-from sing_gateway.titles import title_match_score
+from sing_gateway.titles import title_rank_key
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +101,9 @@ def search_qq(query: str, limit: int = 3) -> list[SongCandidate]:
                 url=f"https://y.qq.com/n/ryqq/songDetail/{mid}",
             )
         )
-    # Best title match first; QQ's own order breaks ties (stable sort).
-    candidates.sort(key=lambda candidate: -title_match_score(query, candidate.title))
+    # Best title match first, then the caller's capitalisation; QQ's own order
+    # breaks remaining ties (stable sort).
+    candidates.sort(key=lambda candidate: title_rank_key(query, candidate.title), reverse=True)
     return candidates[:limit]
 
 

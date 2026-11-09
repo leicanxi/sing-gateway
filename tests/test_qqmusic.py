@@ -89,6 +89,32 @@ def test_search_parses_rows_and_ranks_exact_titles(monkeypatch: MonkeyPatch) -> 
     assert candidates[0].duration_seconds == 270
 
 
+def test_search_prefers_the_capitalisation_the_user_typed(monkeypatch: MonkeyPatch) -> None:
+    payload = {
+        "code": 0,
+        "data": {
+            "song": {
+                "list": [
+                    {"mid": "lower", "name": "greeeen", "singer": [{"name": "x"}], "interval": 200},
+                    {
+                        "mid": "styled",
+                        "name": "GReeeeN",
+                        "singer": [{"name": "y"}],
+                        "interval": 200,
+                    },
+                ]
+            }
+        },
+    }
+    _patch_client(monkeypatch, lambda url, params: _Response(payload))
+
+    typed = [item.url.rsplit("/", 1)[-1] for item in qqmusic.search_qq("GReeeeN", 5)]
+    lower = [item.url.rsplit("/", 1)[-1] for item in qqmusic.search_qq("greeeen", 5)]
+
+    assert typed == ["styled", "lower"]
+    assert lower == ["lower", "styled"]
+
+
 def _vkey_payload(purl: str, result: int = 0) -> dict[str, Any]:
     return {
         "code": 0,
