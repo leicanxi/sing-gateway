@@ -63,6 +63,8 @@ class SingConfig:
     start: int = 60
     duration: int = 25
     music_source: str = "bilibili"
+    # Refuse a free recording by another artist when the requested one is paid.
+    strict_source: bool = False
     index_rate: float = 0.75
     filter_radius: int = 3
     rms_mix_rate: float = 0.25
@@ -91,6 +93,11 @@ class SingResult:
     # came from pitch_mode=auto rather than from the caller.
     pitch: int = 0
     pitch_auto: bool = False
+    # Which recording the vocal was converted from: "same-artist" (the requested
+    # singer), "other-artist" (a free recording by someone else) or "unknown"
+    # (Bilibili uploads, where the artist field is the uploader).
+    source_match: str = ""
+    original_artist: str = ""
 
     def as_block(self) -> dict[str, Any]:
         block: dict[str, Any] = {
@@ -112,4 +119,10 @@ class SingResult:
             block["pitch"] = self.pitch
         if self.pitch_auto:
             block["pitch_auto"] = True
+        # ``artist`` is the recording actually used; when it differs from the
+        # requested original, say so instead of letting the client assume.
+        if self.source_match:
+            block["source_match"] = self.source_match
+        if self.original_artist:
+            block["original_artist"] = self.original_artist
         return block

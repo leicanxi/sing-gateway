@@ -40,7 +40,7 @@ def test_pick_candidate_prefers_full_track_over_vip_trial(monkeypatch: MonkeyPat
     )
     monkeypatch.setattr(netease, "window_has_lyrics", lambda url, start, duration: True)
     picked = service._pick_candidate("大鱼", SingConfig(music_source="netease"))
-    assert picked.url.endswith("id=2")
+    assert picked.candidate.url.endswith("id=2")
 
 
 def test_pick_candidate_skips_instrumental_uploads(monkeypatch: MonkeyPatch) -> None:
@@ -49,7 +49,7 @@ def test_pick_candidate_skips_instrumental_uploads(monkeypatch: MonkeyPatch) -> 
     monkeypatch.setattr(netease, "track_info", lambda url: (True, 319.0, None))
     monkeypatch.setattr(netease, "window_has_lyrics", lambda url, start, duration: True)
     picked = service._pick_candidate("大鱼", SingConfig(music_source="netease"))
-    assert picked.url.endswith("id=2")
+    assert picked.candidate.url.endswith("id=2")
 
 
 def test_pick_candidate_skips_preview_without_vocals(monkeypatch: MonkeyPatch) -> None:
@@ -66,7 +66,7 @@ def test_pick_candidate_skips_preview_without_vocals(monkeypatch: MonkeyPatch) -
         netease, "window_has_lyrics", lambda url, start, duration: not url.endswith("id=1")
     )
     picked = service._pick_candidate("大鱼", SingConfig(music_source="netease"))
-    assert picked.url.endswith("id=2")
+    assert picked.candidate.url.endswith("id=2")
 
 
 def test_pick_candidate_skips_full_track_without_vocals_in_window(
@@ -79,7 +79,7 @@ def test_pick_candidate_skips_full_track_without_vocals_in_window(
         netease, "window_has_lyrics", lambda url, start, duration: not url.endswith("id=1")
     )
     picked = service._pick_candidate("歌", SingConfig(music_source="netease"))
-    assert picked.url.endswith("id=2")
+    assert picked.candidate.url.endswith("id=2")
 
 
 def test_pick_candidate_uses_preview_when_it_has_vocals(monkeypatch: MonkeyPatch) -> None:
@@ -88,7 +88,7 @@ def test_pick_candidate_uses_preview_when_it_has_vocals(monkeypatch: MonkeyPatch
     monkeypatch.setattr(netease, "track_info", lambda url: (True, 30.0, 30.0))
     monkeypatch.setattr(netease, "window_has_lyrics", lambda url, start, duration: True)
     picked = service._pick_candidate("歌", SingConfig(music_source="netease"))
-    assert picked.url.endswith("id=1")
+    assert picked.candidate.url.endswith("id=1")
 
 
 def test_pick_candidate_accepts_preview_when_lyrics_unknown(monkeypatch: MonkeyPatch) -> None:
@@ -97,7 +97,7 @@ def test_pick_candidate_accepts_preview_when_lyrics_unknown(monkeypatch: MonkeyP
     monkeypatch.setattr(netease, "track_info", lambda url: (True, 30.0, 30.0))
     monkeypatch.setattr(netease, "window_has_lyrics", lambda url, start, duration: None)
     picked = service._pick_candidate("歌", SingConfig(music_source="netease"))
-    assert picked.url.endswith("id=1")
+    assert picked.candidate.url.endswith("id=1")
 
 
 def test_pick_candidate_skips_preview_shorter_than_clip(monkeypatch: MonkeyPatch) -> None:
@@ -124,7 +124,7 @@ def test_pick_candidate_keeps_first_result_for_bilibili(monkeypatch: MonkeyPatch
     rows = [_candidate(1), _candidate(2)]
     _patch_search(monkeypatch, rows)
     picked = service._pick_candidate("大鱼", SingConfig(music_source="bilibili"))
-    assert picked.url.endswith("id=1")
+    assert picked.candidate.url.endswith("id=1")
 
 
 def test_pick_candidate_falls_back_when_probe_unavailable(monkeypatch: MonkeyPatch) -> None:
@@ -136,7 +136,7 @@ def test_pick_candidate_falls_back_when_probe_unavailable(monkeypatch: MonkeyPat
 
     monkeypatch.setattr(netease, "track_info", probe_fails)
     picked = service._pick_candidate("大鱼", SingConfig(music_source="netease"))
-    assert picked.url.endswith("id=1")
+    assert picked.candidate.url.endswith("id=1")
 
 
 class _SearchResponse:
@@ -178,13 +178,15 @@ def test_pick_candidate_follows_the_source_match_ranking(monkeypatch: MonkeyPatc
     monkeypatch.setattr(netease, "track_info", lambda url: (True, 320.0, None))
     monkeypatch.setattr(netease, "window_has_lyrics", lambda url, start, duration: True)
     picked = service._pick_candidate("稻香", SingConfig(music_source="netease"))
-    assert picked.url.endswith("id=2")
+    assert picked.candidate.url.endswith("id=2")
 
 
 def test_render_song_by_query_labels_the_picked_song(monkeypatch: MonkeyPatch) -> None:
     """The block must name the version that was sung, not just the file name."""
     picked = _candidate(1, "稻香")
-    monkeypatch.setattr(service, "_pick_candidate", lambda song, cfg: picked)
+    monkeypatch.setattr(
+        service, "_pick_candidate", lambda song, cfg: service._Pick(picked, "same-artist")
+    )
     monkeypatch.setattr(
         service,
         "render_song",

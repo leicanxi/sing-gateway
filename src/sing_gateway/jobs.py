@@ -111,6 +111,10 @@ class JobManager:
                 data["pitch"] = int(job.result.get("pitch") or 0)
             if job.result.get("pitch_auto"):
                 data["pitch_auto"] = True
+            if job.result.get("source_match"):
+                data["source_match"] = str(job.result.get("source_match"))
+            if job.result.get("original_artist"):
+                data["original_artist"] = str(job.result.get("original_artist"))
         return data
 
     async def _run(self, job: Job) -> None:

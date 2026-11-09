@@ -178,6 +178,10 @@ def _as_float(value: Any, default: float, *, minimum: float, maximum: float) -> 
     return max(minimum, min(maximum, parsed))
 
 
+def _as_bool(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _request_payload(body: ChatCompletionRequest) -> dict[str, Any]:
     user_messages = [message for message in body.messages if message.role == "user"]
     content = user_messages[-1].content.strip() if user_messages else ""
@@ -286,6 +290,7 @@ def _config(payload: dict[str, Any]) -> SingConfig:
         music_source=str(
             payload.get("source") or os.environ.get("SING_MUSIC_SOURCE", "") or "bilibili"
         ).strip(),
+        strict_source=_as_bool(os.environ.get("SING_STRICT_SOURCE")),
         cache_ttl_hours=_as_float(
             os.environ.get("SING_CACHE_TTL_HOURS"), 168.0, minimum=0.0, maximum=8760.0
         ),

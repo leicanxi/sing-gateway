@@ -78,6 +78,7 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_INSTRUMENTAL_VOLUME` | `-60` | Default instrumental gain in dB, `-60` (muted) to `+12` (boosted); payload `"instrumental_volume"` overrides per request |
 | `SING_BACKUP_VOCALS_VOLUME` | `-60` | Default backup-vocal (harmony) gain in dB, same scale; that stem keeps the original singer's voice; payload `"backup_vocals_volume"` overrides per request |
 | `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili`, `netease`, `qq`, or `auto` (QQ → NetEase → Bilibili, first usable hit wins); payload `"source"` overrides per request |
+| `SING_STRICT_SOURCE` | off | Refuse a free recording by another artist when the requested one is paid (see song-choice policy below) |
 | `SING_CACHE_TTL_HOURS` | `168` | Disk cache TTL |
 | `SING_CACHE_MAX_ENTRIES` | `50` | Disk cache entries (up to 5000) |
 | `SING_MAX_CONCURRENCY` | `2` | Concurrent background renders; extra jobs queue |
@@ -166,10 +167,25 @@ concurrency can trip QQ's risk control, and the account's own rights apply.
 NetEase, then Bilibili and keeps the first source that yields a usable
 recording. That covers the common case where a track is VIP-only on one service
 but free on another. Each attempt is a search plus up to five probes, all inside
-the background job. If the original turns out to be paid, the fallback may use a
-free recording of the same title by another artist; the returned `title` /
-`artist` name it, and `qq` + cookies (or an explicit `source`) is the
-exact-match path.
+the background job.
+
+**Song-choice policy.** When the requested singer has no free recording, the
+gateway may fall back to a free recording of the same title by someone else
+(usually a re-upload, sometimes a cover), because availability matters more than
+an exact match for a cover service. Hits are ranked before probing:
+
+1. the best title match (the reference recording);
+2. same-artist alternatives;
+3. clean-titled uploads by another artist;
+4. decorated titles (live, cover, piano, remix …).
+
+Instrumental uploads and AI covers (`AI翻唱`, `RVC`, …) are dropped outright:
+one has no vocal to convert, the other would stack artifacts.
+`SING_STRICT_SOURCE=1` turns the fallback off and fails instead. Either way the
+result says what was used: `artist` is the recording that was sung,
+`source_match` is `same-artist` / `other-artist` / `unknown` (Bilibili uploads,
+where the artist field is the uploader), and `original_artist` names the
+requested singer when it differs.
 
 Third-party VIP "resolver" APIs are deliberately not wired in: the ones used by
 comparable projects are either dead (api.lolimi.cn no longer resolves), paid
@@ -350,9 +366,14 @@ GET /sing/v1/jobs/job_...
   "duration_seconds": 60,
   "cached": true,
   "pitch": 12,
-  "pitch_auto": true
+  "pitch_auto": true,
+  "source_match": "same-artist"
 }
 ```
+
+When a free recording by another artist was used instead, `source_match` is
+`other-artist` and `original_artist` carries the requested singer; Bilibili
+results report `unknown` because their artist field is the uploader.
 
 - Statuses: `queued`, `running`, `succeeded`, `failed` (`failed` carries
   `error`). Clients poll every few seconds; `SING_JOB_TTL_SECONDS` keeps

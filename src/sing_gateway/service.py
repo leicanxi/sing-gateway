@@ -7,12 +7,12 @@ import os
 import re
 import shutil
 import tempfile
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import httpx
 
-from sing_gateway import bilibili, cache, media, netease, pitch, qqmusic, replicate
+from sing_gateway import bilibili, cache, media, netease, pitch, qqmusic, replicate, titles
 from sing_gateway.config import (
     AUTO_PITCH_MODE,
     AUTO_SOURCE,
@@ -201,21 +201,103 @@ def render_song(url: str, cfg: SingConfig, artist: str = "") -> SingResult:
     )
 
 
-def _pick_from_source(song: str, cfg: SingConfig, source: str) -> SongCandidate:
+@dataclass(frozen=True)
+class _Pick:
+    """A chosen recording plus how it relates to the requested original."""
+
+    candidate: SongCandidate
+    match: str = ""
+    original_artist: str = ""
+
+
+def _artist_names(value: str) -> set[str]:
+    return {part.strip().casefold() for part in re.split(r"[/、,&，]", value or "") if part.strip()}
+
+
+def _same_artist(left: str, right: str) -> bool:
+    names = _artist_names(left)
+    return bool(names) and bool(names & _artist_names(right))
+
+
+def _rank_candidates(
+    candidates: list[SongCandidate], strict: bool
+) -> tuple[list[SongCandidate], SongCandidate | None]:
+    """Order hits by how likely they are the recording the user asked for.
+
+    The best title match defines the reference singer and length. Same-artist
+    hits come first; a clean-titled upload by someone else next (usually a
+    re-upload of the original); decorated titles (live, cover, piano …) last.
+    AI-cover uploads and instrumentals are dropped outright: the first would
+    compound artifacts, the second has no vocal to convert.
+    """
+    usable = [
+        candidate
+        for candidate in candidates
+        if not titles.is_ai_cover_title(candidate.title)
+        and not any(hint in candidate.title.lower() for hint in _INSTRUMENTAL_TITLE_HINTS)
+    ]
+    if not usable:
+        return [], None
+    reference = usable[0]
+    reference_duration = reference.duration_seconds
+
+    def key(candidate: SongCandidate) -> tuple[int, int]:
+        if candidate is reference or _same_artist(reference.artist, candidate.artist):
+            tier = 0
+        elif titles.is_variant_title(candidate.title):
+            tier = 2
+        else:
+            tier = 1
+        gap = 0
+        if reference_duration > 0 and candidate.duration_seconds > 0:
+            gap = abs(candidate.duration_seconds - reference_duration)
+        return tier, gap
+
+    ranked = sorted(usable, key=key)
+    if strict:
+        ranked = [
+            candidate
+            for candidate in ranked
+            if candidate is reference or _same_artist(reference.artist, candidate.artist)
+        ]
+    return ranked, reference
+
+
+def _match_info(
+    source: str, reference: SongCandidate | None, chosen: SongCandidate
+) -> tuple[str, str]:
+    if source == "bilibili" or reference is None or not reference.artist:
+        return "unknown", ""
+    if chosen is reference or _same_artist(reference.artist, chosen.artist):
+        return "same-artist", ""
+    return "other-artist", reference.artist
+
+
+def _pick_from_source(song: str, cfg: SingConfig, source: str) -> _Pick:
     """Pick a usable hit from one source, or raise ``ClientSongError``."""
     probing = source in {"netease", "qq"}
     candidates = search_songs(song, 5 if probing else 1, source)
     if not candidates:
         raise ClientSongError(f"no song found for {song!r}")
+    ranked, reference = _rank_candidates(candidates, cfg.strict_source)
+    if not ranked:
+        if cfg.strict_source:
+            raise ClientSongError("只找到其他歌手的免费版本（已开启严格模式）")
+        raise ClientSongError(f"{source} 只返回了伴奏或 AI 翻唱版本，没有可用的演唱录音")
     if source == "qq":
-        return _pick_qq_candidate(candidates, cfg)
-    if source != "netease":
-        return candidates[0]
+        chosen = _pick_qq_candidate(ranked, cfg)
+    elif source == "netease":
+        chosen = _pick_netease_candidate(ranked, cfg)
+    else:
+        chosen = ranked[0]
+    match, original = _match_info(source, reference, chosen)
+    return _Pick(chosen, match, original)
+
+
+def _pick_netease_candidate(candidates: list[SongCandidate], cfg: SingConfig) -> SongCandidate:
     preview_fallback: SongCandidate | None = None
     probed = False
     for candidate in candidates:
-        if any(hint in candidate.title.lower() for hint in _INSTRUMENTAL_TITLE_HINTS):
-            continue
         try:
             has_audio, total, trial_end = netease.track_info(candidate.url)
         except Exception:
@@ -243,15 +325,14 @@ def _pick_from_source(song: str, cfg: SingConfig, source: str) -> SongCandidate:
     )
 
 
-def _pick_candidate(song: str, cfg: SingConfig) -> SongCandidate:
+def _pick_candidate(song: str, cfg: SingConfig) -> _Pick:
     """Pick the best-matching search hit whose window actually contains singing.
 
     Covers are generated from a fixed ``start`` window. NetEase VIP tracks
     resolve to a short preview clip starting at 0s, and long intros or
     instrumental sections leave the window without vocals — the model then
-    turns separation bleed into noise. Walk the hits in match order (the source
-    ranks them): full tracks win over previews, and any hit whose window has no
-    lyric line is skipped.
+    turns separation bleed into noise. Hits are ranked first (same singer, then
+    clean same-title uploads, then decorated versions) and probed in that order.
 
     ``source=auto`` tries :data:`AUTO_SOURCE_ORDER` and keeps the first source
     that yields a usable recording, so a VIP-only entry on one service can still
@@ -262,7 +343,7 @@ def _pick_candidate(song: str, cfg: SingConfig) -> SongCandidate:
     reasons: list[str] = []
     for source in AUTO_SOURCE_ORDER:
         try:
-            candidate = _pick_from_source(song, cfg, source)
+            pick = _pick_from_source(song, cfg, source)
         except ClientSongError as exc:
             reasons.append(f"{source}: {exc}")
         except Exception as exc:  # noqa: BLE001 - try the next source
@@ -271,32 +352,14 @@ def _pick_candidate(song: str, cfg: SingConfig) -> SongCandidate:
         else:
             if source != AUTO_SOURCE_ORDER[0]:
                 logger.info("auto source picked %s for %r", source, song)
-            return candidate
+            return pick
     raise ClientSongError("没有找到可翻唱的版本（" + "；".join(reasons) + "）")
 
 
-def _artist_names(value: str) -> set[str]:
-    return {part.strip().casefold() for part in re.split(r"[/、,&，]", value or "") if part.strip()}
-
-
-def _same_artist(left: str, right: str) -> bool:
-    names = _artist_names(left)
-    return bool(names) and bool(names & _artist_names(right))
-
-
 def _pick_qq_candidate(candidates: list[SongCandidate], cfg: SingConfig) -> SongCandidate:
-    """Prefer a free QQ recording whose lyric timeline covers the clip window.
-
-    The best title match decides who the song belongs to. When that hit is VIP,
-    only a free recording by the same artist is an acceptable substitute — a
-    random uploader's cover with the same title would silently change the singer
-    the user asked for.
-    """
-    reference_artist = candidates[0].artist if candidates else ""
+    """Return the first ranked QQ hit with a stream and singing in the window."""
     probed = False
     for candidate in candidates:
-        if any(hint in candidate.title.lower() for hint in _INSTRUMENTAL_TITLE_HINTS):
-            continue
         try:
             playable = qqmusic.can_play(candidate.url)
         except Exception:
@@ -304,18 +367,6 @@ def _pick_qq_candidate(candidates: list[SongCandidate], cfg: SingConfig) -> Song
             continue
         probed = True
         if not playable:
-            continue
-        if (
-            candidate is not candidates[0]
-            and reference_artist
-            and not _same_artist(reference_artist, candidate.artist)
-        ):
-            logger.info(
-                "qq skipped %r by %r: original artist is %r",
-                candidate.title,
-                candidate.artist,
-                reference_artist,
-            )
             continue
         total = candidate.duration_seconds
         if total > 0:
@@ -329,16 +380,22 @@ def _pick_qq_candidate(candidates: list[SongCandidate], cfg: SingConfig) -> Song
         # Every probe failed at the network level: let download_audio report it.
         return candidates[0]
     raise ClientSongError(
-        "QQ 音乐没有找到可翻唱的版本（VIP/数字专辑、没有同歌手的免费版本，"
-        "或指定时间段内没有歌词）；可配置 SING_QQ_COOKIES 用已登录账号解锁，"
-        "或换一首免费歌曲/调整 start"
+        "QQ 音乐没有找到可翻唱的版本（VIP/数字专辑或指定时间段内没有歌词）；"
+        "可配置 SING_QQ_COOKIES 用已登录账号解锁，或换一首免费歌曲/调整 start"
     )
 
 
 def render_song_by_query(song: str, cfg: SingConfig) -> SingResult:
     """Search for *song* and generate a cover from the best-matching result."""
-    candidate = _pick_candidate(song, cfg)
+    pick = _pick_candidate(song, cfg)
     # The artist doubles as the pitch_mode=auto source-gender hint.
-    result = render_song(candidate.url, cfg, artist=candidate.artist)
-    # Carry the picked title/artist so clients can show which version was used.
-    return replace(result, title=candidate.title, artist=candidate.artist)
+    result = render_song(pick.candidate.url, cfg, artist=pick.candidate.artist)
+    # Carry the picked title/artist so clients can show which version was used,
+    # and whether it is the requested singer or a free stand-in.
+    return replace(
+        result,
+        title=pick.candidate.title,
+        artist=pick.candidate.artist,
+        source_match=pick.match,
+        original_artist=pick.original_artist,
+    )

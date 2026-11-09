@@ -184,7 +184,9 @@ def test_auto_pitch_is_resolved_before_the_model(tmp_path: Path, monkeypatch: Mo
     monkeypatch.setattr(
         service,
         "_pick_candidate",
-        lambda song, cfg: SongCandidate("雨爱", "杨丞琳", 240, "https://x/song"),
+        lambda song, cfg: service._Pick(
+            SongCandidate("雨爱", "杨丞琳", 240, "https://x/song"), "same-artist"
+        ),
     )
 
     cfg = SingConfig(cache_root=tmp_path, replicate_token="r8_test", pitch_mode=AUTO_PITCH_MODE)
@@ -225,7 +227,9 @@ def test_auto_pitch_shifts_an_octave_for_cross_gender(
     monkeypatch.setattr(
         service,
         "_pick_candidate",
-        lambda song, cfg: SongCandidate("song", "male singer", 240, "https://x/song"),
+        lambda song, cfg: service._Pick(
+            SongCandidate("song", "male singer", 240, "https://x/song"), "same-artist"
+        ),
     )
 
     cfg = SingConfig(

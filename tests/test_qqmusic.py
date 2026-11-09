@@ -10,7 +10,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from sing_gateway import qqmusic, service
-from sing_gateway.config import ClientSongError, SingConfig, SongCandidate
+from sing_gateway.config import ClientSongError, SingConfig, SingResult, SongCandidate
 
 
 class _Response:
@@ -191,17 +191,17 @@ def test_vkey_sends_the_logged_in_uin(monkeypatch: MonkeyPatch, tmp_path: Path) 
 def test_auto_source_falls_back_to_the_next_service(monkeypatch: MonkeyPatch) -> None:
     seen: list[str] = []
 
-    def fake_pick(song: str, cfg: SingConfig, source: str) -> SongCandidate:
+    def fake_pick(song: str, cfg: SingConfig, source: str) -> service._Pick:
         seen.append(source)
         if source == "qq":
             raise ClientSongError("qq: VIP")
-        return _candidate(f"{source}-hit", "晴天")
+        return service._Pick(_candidate(f"{source}-hit", "晴天"), "same-artist")
 
     monkeypatch.setattr(service, "_pick_from_source", fake_pick)
     picked = service._pick_candidate("晴天", SingConfig(music_source="auto"))
 
     assert seen == ["qq", "netease"]
-    assert picked.url.endswith("/netease-hit")
+    assert picked.candidate.url.endswith("/netease-hit")
 
 
 def test_auto_source_reports_every_failure(monkeypatch: MonkeyPatch) -> None:
@@ -272,10 +272,10 @@ def test_pick_skips_vip_hits(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(qqmusic, "window_has_lyrics", lambda url, start, duration: True)
 
     picked = service._pick_candidate("晴天", SingConfig(music_source="qq", pitch_mode="no-change"))
-    assert picked.url.endswith("/free")
+    assert picked.candidate.url.endswith("/free")
 
 
-def test_pick_rejects_a_free_hit_by_another_artist(monkeypatch: MonkeyPatch) -> None:
+def test_pick_uses_a_free_hit_by_another_artist_and_says_so(monkeypatch: MonkeyPatch) -> None:
     candidates = [
         SongCandidate("晴天", "周杰伦", 270, "https://y.qq.com/n/ryqq/songDetail/vip"),
         SongCandidate("晴天", "Lucky小爱", 270, "https://y.qq.com/n/ryqq/songDetail/free"),
@@ -284,22 +284,83 @@ def test_pick_rejects_a_free_hit_by_another_artist(monkeypatch: MonkeyPatch) -> 
     monkeypatch.setattr(qqmusic, "can_play", lambda url: "free" in url)
     monkeypatch.setattr(qqmusic, "window_has_lyrics", lambda url, start, duration: True)
 
-    # The original is VIP; an uploader's free cover must not silently replace it.
-    with pytest.raises(ClientSongError):
-        service._pick_candidate("晴天", SingConfig(music_source="qq"))
+    # Availability first, but the result names the stand-in and the original.
+    picked = service._pick_candidate("晴天", SingConfig(music_source="qq"))
+    assert picked.candidate.url.endswith("/free")
+    assert picked.match == "other-artist"
+    assert picked.original_artist == "周杰伦"
 
 
-def test_pick_accepts_a_free_hit_by_the_same_artist(monkeypatch: MonkeyPatch) -> None:
+def test_strict_source_refuses_another_artist(monkeypatch: MonkeyPatch) -> None:
     candidates = [
         SongCandidate("晴天", "周杰伦", 270, "https://y.qq.com/n/ryqq/songDetail/vip"),
-        SongCandidate("晴天", "周杰伦/某合唱", 270, "https://y.qq.com/n/ryqq/songDetail/free"),
+        SongCandidate("晴天", "Lucky小爱", 270, "https://y.qq.com/n/ryqq/songDetail/free"),
     ]
     monkeypatch.setattr(service, "search_songs", lambda song, limit, source: candidates)
     monkeypatch.setattr(qqmusic, "can_play", lambda url: "free" in url)
     monkeypatch.setattr(qqmusic, "window_has_lyrics", lambda url, start, duration: True)
 
+    with pytest.raises(ClientSongError):
+        service._pick_candidate("晴天", SingConfig(music_source="qq", strict_source=True))
+
+
+def test_pick_prefers_a_free_hit_by_the_same_artist(monkeypatch: MonkeyPatch) -> None:
+    candidates = [
+        SongCandidate("晴天", "周杰伦", 270, "https://y.qq.com/n/ryqq/songDetail/vip"),
+        SongCandidate("晴天", "Lucky小爱", 270, "https://y.qq.com/n/ryqq/songDetail/other"),
+        SongCandidate("晴天", "周杰伦/某合唱", 271, "https://y.qq.com/n/ryqq/songDetail/same"),
+    ]
+    monkeypatch.setattr(service, "search_songs", lambda song, limit, source: candidates)
+    monkeypatch.setattr(qqmusic, "can_play", lambda url: "vip" not in url)
+    monkeypatch.setattr(qqmusic, "window_has_lyrics", lambda url, start, duration: True)
+
     picked = service._pick_candidate("晴天", SingConfig(music_source="qq"))
-    assert picked.url.endswith("/free")
+
+    assert picked.candidate.url.endswith("/same")
+    assert picked.match == "same-artist"
+
+
+def test_rank_candidates_drops_ai_covers_and_instrumentals() -> None:
+    ai = SongCandidate("晴天 (AI翻唱)", "某AI", 270, "https://y.qq.com/n/ryqq/songDetail/ai")
+    inst = SongCandidate("晴天 (伴奏)", "某人", 270, "https://y.qq.com/n/ryqq/songDetail/inst")
+    clean = SongCandidate("晴天", "周杰伦", 270, "https://y.qq.com/n/ryqq/songDetail/clean")
+
+    ranked, reference = service._rank_candidates([clean, ai, inst], strict=False)
+
+    assert [item.url for item in ranked] == [clean.url]
+    assert reference is clean
+
+
+def test_variant_titles_rank_below_clean_same_title(monkeypatch: MonkeyPatch) -> None:
+    candidates = [
+        SongCandidate("晴天", "周杰伦", 270, "https://y.qq.com/n/ryqq/songDetail/vip"),
+        SongCandidate("晴天 (Live)", "某人", 270, "https://y.qq.com/n/ryqq/songDetail/live"),
+        SongCandidate("晴天", "搬运工", 271, "https://y.qq.com/n/ryqq/songDetail/clean"),
+    ]
+    monkeypatch.setattr(service, "search_songs", lambda song, limit, source: candidates)
+    monkeypatch.setattr(qqmusic, "can_play", lambda url: "vip" not in url)
+    monkeypatch.setattr(qqmusic, "window_has_lyrics", lambda url, start, duration: True)
+
+    picked = service._pick_candidate("晴天", SingConfig(music_source="qq"))
+
+    assert picked.candidate.url.endswith("/clean")
+    assert picked.match == "other-artist"
+
+
+def test_render_by_query_discloses_the_stand_in(monkeypatch: MonkeyPatch) -> None:
+    pick = service._Pick(_candidate("free", "晴天"), "other-artist", "周杰伦")
+    monkeypatch.setattr(service, "_pick_candidate", lambda song, cfg: pick)
+    monkeypatch.setattr(
+        service,
+        "render_song",
+        lambda url, cfg, artist="": SingResult("https://cdn/a.mp3", "a.mp3"),
+    )
+
+    block = service.render_song_by_query("晴天", SingConfig()).as_block()
+
+    assert block["artist"] == "artist"
+    assert block["source_match"] == "other-artist"
+    assert block["original_artist"] == "周杰伦"
 
 
 def test_pick_raises_when_every_hit_is_vip(monkeypatch: MonkeyPatch) -> None:

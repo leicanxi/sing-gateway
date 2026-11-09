@@ -18,6 +18,17 @@ _VARIANT_RE = re.compile(
     r"现场|加速|慢速|抖音|翻唱|伴奏|纯音乐|铃声|片段|串烧|medley|cover|live|remix|dj",
     re.IGNORECASE,
 )
+# Uploader-made AI covers compound artifacts when used as a cover source.
+_AI_COVER_RE = re.compile(r"ai\s*(?:cover|翻唱)|rvc|sovits|diff-svc|变声", re.IGNORECASE)
+
+
+def is_variant_title(title: str) -> bool:
+    """Whether the title marks a different arrangement (live, cover, piano …)."""
+    return bool(_VARIANT_RE.search(title or ""))
+
+
+def is_ai_cover_title(title: str) -> bool:
+    return bool(_AI_COVER_RE.search(title or ""))
 
 
 def normalized_title(value: str) -> str:
