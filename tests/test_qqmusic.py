@@ -150,6 +150,74 @@ def test_vip_track_has_no_playable_url(monkeypatch: MonkeyPatch) -> None:
     assert qqmusic.can_play("https://y.qq.com/n/ryqq/songDetail/bbb") is False
 
 
+def test_parse_netscape_cookies_and_account_uin() -> None:
+    text = (
+        "# Netscape HTTP Cookie File\n"
+        "#HttpOnly_.qq.com\tTRUE\t/\tFALSE\t0\tqqmusic_key\tABC\n"
+        ".qq.com\tTRUE\t/\tFALSE\t0\tuin\to0123456789\n"
+    )
+    jar = qqmusic.parse_netscape_cookies(text)
+
+    assert jar == {"qqmusic_key": "ABC", "uin": "o0123456789"}
+    assert qqmusic._account_uin(jar) == "123456789"
+    assert qqmusic._account_uin({}) == ""
+
+
+def test_vkey_sends_the_logged_in_uin(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".qq.com\tTRUE\t/\tFALSE\t0\tqqmusic_key\tABC\n"
+        ".qq.com\tTRUE\t/\tFALSE\t0\tuin\to0123456789\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SING_QQ_COOKIES", str(cookies))
+    monkeypatch.setattr(qqmusic, "_cookie_stamp", None)
+
+    captured: dict[str, Any] = {}
+
+    def handler(url: str, params: dict[str, Any]) -> _Response:
+        captured.update(json.loads(params["data"]))
+        return _Response(_vkey_payload("C400.m4a?guid=1&vkey=x"))
+
+    _patch_client(monkeypatch, handler)
+    with qqmusic._client() as client:
+        qqmusic._vkey(client, "bbb")
+
+    assert captured["req_0"]["param"]["uin"] == "123456789"
+    assert captured["comm"]["uin"] == 123456789
+
+
+def test_auto_source_falls_back_to_the_next_service(monkeypatch: MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def fake_pick(song: str, cfg: SingConfig, source: str) -> SongCandidate:
+        seen.append(source)
+        if source == "qq":
+            raise ClientSongError("qq: VIP")
+        return _candidate(f"{source}-hit", "晴天")
+
+    monkeypatch.setattr(service, "_pick_from_source", fake_pick)
+    picked = service._pick_candidate("晴天", SingConfig(music_source="auto"))
+
+    assert seen == ["qq", "netease"]
+    assert picked.url.endswith("/netease-hit")
+
+
+def test_auto_source_reports_every_failure(monkeypatch: MonkeyPatch) -> None:
+    def fail(song: str, cfg: SingConfig, source: str) -> SongCandidate:
+        raise ClientSongError(f"{source}-unavailable")
+
+    monkeypatch.setattr(service, "_pick_from_source", fail)
+    with pytest.raises(ClientSongError) as excinfo:
+        service._pick_candidate("晴天", SingConfig(music_source="auto"))
+
+    message = str(excinfo.value)
+    assert "qq-unavailable" in message
+    assert "netease-unavailable" in message
+    assert "bilibili-unavailable" in message
+
+
 def test_download_writes_stream_and_metadata(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     def handler(url: str, params: dict[str, Any]) -> _Response:
         if url == qqmusic.SEARCH_URL:
@@ -207,6 +275,33 @@ def test_pick_skips_vip_hits(monkeypatch: MonkeyPatch) -> None:
     assert picked.url.endswith("/free")
 
 
+def test_pick_rejects_a_free_hit_by_another_artist(monkeypatch: MonkeyPatch) -> None:
+    candidates = [
+        SongCandidate("晴天", "周杰伦", 270, "https://y.qq.com/n/ryqq/songDetail/vip"),
+        SongCandidate("晴天", "Lucky小爱", 270, "https://y.qq.com/n/ryqq/songDetail/free"),
+    ]
+    monkeypatch.setattr(service, "search_songs", lambda song, limit, source: candidates)
+    monkeypatch.setattr(qqmusic, "can_play", lambda url: "free" in url)
+    monkeypatch.setattr(qqmusic, "window_has_lyrics", lambda url, start, duration: True)
+
+    # The original is VIP; an uploader's free cover must not silently replace it.
+    with pytest.raises(ClientSongError):
+        service._pick_candidate("晴天", SingConfig(music_source="qq"))
+
+
+def test_pick_accepts_a_free_hit_by_the_same_artist(monkeypatch: MonkeyPatch) -> None:
+    candidates = [
+        SongCandidate("晴天", "周杰伦", 270, "https://y.qq.com/n/ryqq/songDetail/vip"),
+        SongCandidate("晴天", "周杰伦/某合唱", 270, "https://y.qq.com/n/ryqq/songDetail/free"),
+    ]
+    monkeypatch.setattr(service, "search_songs", lambda song, limit, source: candidates)
+    monkeypatch.setattr(qqmusic, "can_play", lambda url: "free" in url)
+    monkeypatch.setattr(qqmusic, "window_has_lyrics", lambda url, start, duration: True)
+
+    picked = service._pick_candidate("晴天", SingConfig(music_source="qq"))
+    assert picked.url.endswith("/free")
+
+
 def test_pick_raises_when_every_hit_is_vip(monkeypatch: MonkeyPatch) -> None:
     candidates = [_candidate("vip1", "晴天"), _candidate("vip2", "晴天")]
     monkeypatch.setattr(service, "search_songs", lambda song, limit, source: candidates)
@@ -229,3 +324,21 @@ def test_search_songs_dispatches_qq(monkeypatch: MonkeyPatch) -> None:
 
     assert seen == {"query": "晴天", "limit": 2}
     assert result[0].url.endswith("/bbb")
+
+
+def test_search_songs_auto_stops_at_the_first_service_with_hits(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(qqmusic, "search_qq", lambda query, limit: [])
+    monkeypatch.setattr(
+        service.netease, "search_netease", lambda query, limit: [_candidate("n1", "晴天")]
+    )
+    monkeypatch.setattr(
+        service.bilibili,
+        "search_bilibili",
+        lambda query, limit: pytest.fail("auto must stop before bilibili"),
+    )
+
+    result = service.search_songs("晴天", 2, "auto")
+
+    assert result[0].url.endswith("/n1")

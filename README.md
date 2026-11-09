@@ -77,7 +77,7 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_GENDER_LLM_MODEL` | falls back to `SING_REVIEW_MODEL` | Model name (default `deepseek-chat`) |
 | `SING_INSTRUMENTAL_VOLUME` | `-60` | Default instrumental gain in dB, `-60` (muted) to `+12` (boosted); payload `"instrumental_volume"` overrides per request |
 | `SING_BACKUP_VOCALS_VOLUME` | `-60` | Default backup-vocal (harmony) gain in dB, same scale; that stem keeps the original singer's voice; payload `"backup_vocals_volume"` overrides per request |
-| `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili`, `netease` or `qq` (payload `"source"` overrides per request) |
+| `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili`, `netease`, `qq`, or `auto` (QQ → NetEase → Bilibili, first usable hit wins); payload `"source"` overrides per request |
 | `SING_CACHE_TTL_HOURS` | `168` | Disk cache TTL |
 | `SING_CACHE_MAX_ENTRIES` | `50` | Disk cache entries (up to 5000) |
 | `SING_MAX_CONCURRENCY` | `2` | Concurrent background renders; extra jobs queue |
@@ -87,6 +87,7 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_VOICE_ALIASES_FILE` | `~/.octop/sing-voice-aliases.json` | Extra search aliases, flat JSON (`{"初音": ["hatsune miku"]}`) |
 | `SING_VOICE_PLAZA_URL` | `https://voice-models.flowbee.top` | Voice plaza link returned by the guide endpoints |
 | `SING_BILI_COOKIES` | — | Path to a Netscape `cookies.txt` for Bilibili (see HTTP 412 below) |
+| `SING_QQ_COOKIES` | — | Path to a Netscape `cookies.txt` for QQ Music; a logged-in account unlocks VIP tracks |
 | `SING_PROXY` | — | Optional proxy (`http://host:port`) for Bilibili search/download |
 | `SING_NCM_API` | — | Base URL of a running ncm-api sidecar (see below); unlocks VIP tracks |
 
@@ -152,9 +153,28 @@ route music traffic through a different exit node.
 `"source": "qq"` per request) searches QQ Music anonymously and resolves a
 stream through its vkey endpoint. Free tracks download as m4a; VIP and
 digital-album tracks answer `104003`, which becomes the same explicit 400 the
-NetEase path uses instead of an empty render. There is no QQ cookie support
-yet, so VIP-only catalogue entries are simply unusable. As with NetEase, pick a
-free recording when the original is paid.
+NetEase path uses instead of an empty render.
+
+For VIP tracks, export cookies from a logged-in QQ Music account (same
+"Get cookies.txt LOCALLY" flow as Bilibili) and point `SING_QQ_COOKIES` at the
+file. The gateway reads `uin` and `qqmusic_key` from it and sends the account
+with the vkey request; the file is re-read when it changes, so refreshing an
+expired session needs no restart. One shared account is one session: heavy
+concurrency can trip QQ's risk control, and the account's own rights apply.
+
+**Cross-source fallback.** With `"source": "auto"` the gateway tries QQ, then
+NetEase, then Bilibili and keeps the first source that yields a usable
+recording. That covers the common case where a track is VIP-only on one service
+but free on another. Each attempt is a search plus up to five probes, all inside
+the background job. If the original turns out to be paid, the fallback may use a
+free recording of the same title by another artist; the returned `title` /
+`artist` name it, and `qq` + cookies (or an explicit `source`) is the
+exact-match path.
+
+Third-party VIP "resolver" APIs are deliberately not wired in: the ones used by
+comparable projects are either dead (api.lolimi.cn no longer resolves), paid
+key-only services, or return unrelated songs. If you have a working provider,
+the cookie path above is the more stable way to unlock the same catalogue.
 
 When searching by song name, the gateway probes up to five hits per source:
 tracks whose clip window has no lyric line are skipped, and for QQ a hit with no

@@ -13,7 +13,11 @@ PITCH_MODES = frozenset({"no-change", "male-to-female", "female-to-male"})
 # Not a model value: the gateway resolves it to semitones from the song's
 # artist and the chosen voice, then sends the model a plain key shift.
 AUTO_PITCH_MODE = "auto"
-MUSIC_SOURCES = frozenset({"bilibili", "netease", "qq"})
+# Search across sources (see AUTO_SOURCE_ORDER) instead of pinning one.
+AUTO_SOURCE = "auto"
+MUSIC_SOURCES = frozenset({"bilibili", "netease", "qq", AUTO_SOURCE})
+# Used when source=auto: the first source that yields a usable recording wins.
+AUTO_SOURCE_ORDER = ("qq", "netease", "bilibili")
 # Mixing gains are dB offsets the cover model applies when remixing converted
 # vocals with the separated stems: 0 keeps a stem at source loudness, -60 mutes
 # it, positive values boost it. The model's schema has no bounds; +12 measured

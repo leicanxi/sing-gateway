@@ -40,14 +40,74 @@ _SONG_URL_RE = re.compile(r"(?:songDetail/|songmid=)([0-9A-Za-z]+)")
 # 104003: the account has no playback right (VIP / digital album / region).
 _NO_RIGHT = 104003
 _AUDIO_SUFFIXES = {".m4a", ".mp3", ".flac", ".aac"}
+COOKIES_ENV = "SING_QQ_COOKIES"
+
+_cookie_stamp: tuple[int, int] | None = None
+_cookie_jar: dict[str, str] = {}
 
 
 def _proxy() -> str | None:
     return os.environ.get("SING_PROXY", "").strip() or None
 
 
+def parse_netscape_cookies(text: str) -> dict[str, str]:
+    """Parse a browser-exported cookies.txt into a name→value jar."""
+    jar: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_") :]
+        elif not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 7 and parts[5]:
+            jar[parts[5]] = parts[6]
+    return jar
+
+
+def _cookies() -> dict[str, str]:
+    """Cookies from ``SING_QQ_COOKIES``; re-read when the file changes."""
+    global _cookie_jar, _cookie_stamp
+
+    path = os.environ.get(COOKIES_ENV, "").strip()
+    if not path:
+        return {}
+    target = Path(path).expanduser()
+    try:
+        stat = target.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        logger.warning("SING_QQ_COOKIES file not found: %s", target)
+        return {}
+    if _cookie_stamp == stamp:
+        return _cookie_jar
+    try:
+        jar = parse_netscape_cookies(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        logger.warning("could not read QQ cookies: %s", target, exc_info=True)
+        return {}
+    _cookie_jar = jar
+    _cookie_stamp = stamp
+    return jar
+
+
+def _account_uin(jar: dict[str, str]) -> str:
+    """Numeric account id from ``uin``/``p_uin``/``wxuin`` cookies."""
+    for name in ("uin", "p_uin", "wxuin"):
+        digits = "".join(ch for ch in str(jar.get(name) or "") if ch.isdigit())
+        if digits:
+            return digits.lstrip("0") or "0"
+    return ""
+
+
 def _client() -> httpx.Client:
-    return httpx.Client(timeout=20.0, headers=HEADERS, follow_redirects=True, proxy=_proxy())
+    return httpx.Client(
+        timeout=20.0,
+        headers=HEADERS,
+        cookies=_cookies(),
+        follow_redirects=True,
+        proxy=_proxy(),
+    )
 
 
 def is_qq_url(url: str) -> bool:
@@ -108,8 +168,13 @@ def search_qq(query: str, limit: int = 3) -> list[SongCandidate]:
 
 
 def _vkey(client: httpx.Client, mid: str) -> tuple[str, int]:
-    """Return ``(playable_url, result_code)`` for one song mid."""
+    """Return ``(playable_url, result_code)`` for one song mid.
+
+    With ``SING_QQ_COOKIES`` set the account uin is sent along; that is what
+    turns a 104003 (no playback right) into a stream for VIP tracks.
+    """
     guid = str(secrets.randbelow(9_000_000_000) + 1_000_000_000)
+    uin = _account_uin(_cookies())
     request = {
         "req_0": {
             "module": "vkey.GetVkeyServer",
@@ -118,12 +183,12 @@ def _vkey(client: httpx.Client, mid: str) -> tuple[str, int]:
                 "guid": guid,
                 "songmid": [mid],
                 "songtype": [0],
-                "uin": "0",
+                "uin": uin or "0",
                 "loginflag": 1,
                 "platform": "20",
             },
         },
-        "comm": {"uin": 0, "format": "json", "ct": 24, "cv": 0},
+        "comm": {"uin": int(uin or 0), "format": "json", "ct": 24, "cv": 0},
     }
     response = client.get(
         VKEY_URL,
@@ -209,6 +274,13 @@ def download_audio(url: str, workdir: Path) -> tuple[Path, str, float]:
     with _client() as client:
         audio_url, result = _vkey(client, mid)
         if not audio_url:
+            if result == _NO_RIGHT:
+                hint = (
+                    "当前 QQ 账号没有该曲的播放权限"
+                    if _cookies()
+                    else "该曲需要 VIP/数字专辑；配置 SING_QQ_COOKIES（已登录账号）可解锁"
+                )
+                raise ClientSongError(f"QQ 音乐未返回音频直链：{hint}")
             detail = f"（接口返回 {result}）" if result else ""
             raise ClientSongError(
                 f"QQ 音乐没有返回音频直链{detail}：该歌曲可能需要 VIP/数字专辑或存在地区限制，"
