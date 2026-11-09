@@ -17,7 +17,9 @@ from typing import Any
 
 import httpx
 
+from sing_gateway import lrc
 from sing_gateway.config import ClientSongError, SongCandidate
+from sing_gateway.titles import title_match_score
 
 logger = logging.getLogger(__name__)
 
@@ -32,49 +34,6 @@ HEADERS = {
     "Referer": "https://music.163.com/",
 }
 _SONG_URL_RE = re.compile(r"(?:song\?id=|/song/)(\d+)")
-_LYRIC_TIME_RE = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
-# LRC files usually carry a timestamped credit block (作词/作曲/编曲 …) before
-# the first real line; those are not vocals.
-_LYRIC_CREDIT_RE = re.compile(
-    r"^(作词|作曲|编曲|制作人|监制|出品|录音|混音|母带|吉他|贝斯|鼓|键盘|和声|弦乐|词|曲|OP|SP)\s*[:：]",
-    re.IGNORECASE,
-)
-_TITLE_NOISE_RE = re.compile(r"[\s\-_·・,，。.、!！?？'\"“”‘’()（）\[\]【】《》]+")
-# Decorations that mark a different arrangement rather than the master. Plain
-# and 唱片版/原版/原唱-labelled hits are the recording the user asked for, so they
-# are deliberately absent here.
-_VARIANT_RE = re.compile(
-    r"深情|治愈|伤感|史诗|史詩|女声|男声|男生|女生|童声|合唱|和声|钢琴|吉他|清唱|哼唱|"
-    r"现场|加速|慢速|抖音|翻唱|伴奏|纯音乐|铃声|片段|串烧|medley|cover|live|remix|dj",
-    re.IGNORECASE,
-)
-
-
-def _normalized_title(value: str) -> str:
-    return _TITLE_NOISE_RE.sub("", value or "").casefold()
-
-
-def title_match_score(query: str, title: str) -> float:
-    """How well *title* answers *query*: 1.0 for an exact title, 0.2 unrelated.
-
-    NetEase ranks unknown cover, remix and live uploads above the original for
-    anonymous searches (稻香 → 稻香(深情版) by an uploader), so the query is
-    matched against the title instead of trusting the result order. A title that
-    only decorates the query stays usable but ranks below a plain-titled upload.
-    """
-    wanted = _normalized_title(query)
-    found = _normalized_title(title)
-    if not wanted or not found:
-        return 0.0
-    if found == wanted:
-        return 1.0
-    if found.startswith(wanted):
-        base = 0.7
-    elif wanted in found:
-        base = 0.4
-    else:
-        base = 0.2
-    return max(0.1, base - 0.2) if _VARIANT_RE.search(found) else base
 
 
 def _proxy() -> str | None:
@@ -216,18 +175,6 @@ def track_info(url: str) -> tuple[bool, float, float | None]:
     return has_audio, total, trial_end
 
 
-def _parse_lrc(lrc: str) -> list[tuple[float, str]]:
-    lines: list[tuple[float, str]] = []
-    for raw in lrc.splitlines():
-        line = raw.strip()
-        match = _LYRIC_TIME_RE.match(line)
-        if match is None:
-            continue
-        timestamp = int(match.group(1)) * 60 + float(match.group(2))
-        lines.append((timestamp, line[match.end() :].strip()))
-    return lines
-
-
 def window_has_lyrics(url: str, start: int, duration: int) -> bool | None:
     """Whether a lyric line falls inside ``[start, start + duration]``.
 
@@ -248,12 +195,12 @@ def window_has_lyrics(url: str, start: int, duration: int) -> bool | None:
         return None
     if payload.get("pureMusic") or payload.get("nolyric"):
         return False
-    lrc = str((payload.get("lrc") or {}).get("lyric") or "")
-    if not lrc.strip():
+    lyric = str((payload.get("lrc") or {}).get("lyric") or "")
+    if not lyric.strip():
         return None
     end = start + duration
-    for timestamp, text in _parse_lrc(lrc):
-        if not text or _LYRIC_CREDIT_RE.match(text):
+    for timestamp, text in lrc.parse_lrc(lyric):
+        if not text or lrc.is_credit(text):
             continue
         if start <= timestamp <= end:
             return True

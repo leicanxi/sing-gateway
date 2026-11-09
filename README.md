@@ -77,7 +77,7 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_GENDER_LLM_MODEL` | falls back to `SING_REVIEW_MODEL` | Model name (default `deepseek-chat`) |
 | `SING_INSTRUMENTAL_VOLUME` | `-60` | Default instrumental gain in dB, `-60` (muted) to `+12` (boosted); payload `"instrumental_volume"` overrides per request |
 | `SING_BACKUP_VOCALS_VOLUME` | `-60` | Default backup-vocal (harmony) gain in dB, same scale; that stem keeps the original singer's voice; payload `"backup_vocals_volume"` overrides per request |
-| `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili` or `netease` (payload `"source"` overrides per request) |
+| `SING_MUSIC_SOURCE` | `bilibili` | Music source for search/download: `bilibili`, `netease` or `qq` (payload `"source"` overrides per request) |
 | `SING_CACHE_TTL_HOURS` | `168` | Disk cache TTL |
 | `SING_CACHE_MAX_ENTRIES` | `50` | Disk cache entries (up to 5000) |
 | `SING_MAX_CONCURRENCY` | `2` | Concurrent background renders; extra jobs queue |
@@ -147,6 +147,20 @@ LOCALLY"), place the file on the gateway host, and set `SING_BILI_COOKIES` to
 its path. The file is re-read on every download, so refreshing an expired
 cookie file takes effect without a restart. Alternatively set `SING_PROXY` to
 route music traffic through a different exit node.
+
+**QQ Music is the other cookie-free option.** `SING_MUSIC_SOURCE=qq` (or
+`"source": "qq"` per request) searches QQ Music anonymously and resolves a
+stream through its vkey endpoint. Free tracks download as m4a; VIP and
+digital-album tracks answer `104003`, which becomes the same explicit 400 the
+NetEase path uses instead of an empty render. There is no QQ cookie support
+yet, so VIP-only catalogue entries are simply unusable. As with NetEase, pick a
+free recording when the original is paid.
+
+When searching by song name, the gateway probes up to five hits per source:
+tracks whose clip window has no lyric line are skipped, and for QQ a hit with no
+anonymous stream is skipped in favour of the next one. The `QQ` probe costs one
+extra request per candidate (a few hundred milliseconds), and it runs inside the
+background job.
 
 ### Expanding the NetEase catalog (ncm-api sidecar)
 

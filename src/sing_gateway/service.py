@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 
-from sing_gateway import bilibili, cache, media, netease, pitch, replicate
+from sing_gateway import bilibili, cache, media, netease, pitch, qqmusic, replicate
 from sing_gateway.config import (
     AUTO_PITCH_MODE,
     MUSIC_SOURCES,
@@ -87,6 +87,8 @@ def search_songs(query: str, limit: int = 3, source: str = "bilibili") -> list[S
     limit = max(1, min(5, int(limit)))
     if source == "netease":
         return netease.search_netease(query, limit)
+    if source == "qq":
+        return qqmusic.search_qq(query, limit)
     return bilibili.search_bilibili(query, limit)
 
 
@@ -140,6 +142,8 @@ def render_song(url: str, cfg: SingConfig, artist: str = "") -> SingResult:
     try:
         if netease.is_netease_url(url):
             source, title, total = netease.download_audio(url, workdir)
+        elif qqmusic.is_qq_url(url):
+            source, title, total = qqmusic.download_audio(url, workdir)
         else:
             source, title, total = bilibili.download_audio(url, workdir)
         start = cfg.start
@@ -189,9 +193,12 @@ def _pick_candidate(song: str, cfg: SingConfig) -> SongCandidate:
     ranks them): full tracks win over previews, and any hit whose window has no
     lyric line is skipped.
     """
-    candidates = search_songs(song, 5 if cfg.music_source == "netease" else 1, cfg.music_source)
+    probing = cfg.music_source in {"netease", "qq"}
+    candidates = search_songs(song, 5 if probing else 1, cfg.music_source)
     if not candidates:
         raise ClientSongError(f"no song found for {song!r}")
+    if cfg.music_source == "qq":
+        return _pick_qq_candidate(candidates, cfg)
     if cfg.music_source != "netease":
         return candidates[0]
     preview_fallback: SongCandidate | None = None
@@ -222,6 +229,37 @@ def _pick_candidate(song: str, cfg: SingConfig) -> SongCandidate:
         return candidates[0]
     raise ClientSongError(
         "网易云没有找到可翻唱的版本（VIP 试听段或指定时间段内没有歌词），"
+        "请换一首免费歌曲或调整 start 再试"
+    )
+
+
+def _pick_qq_candidate(candidates: list[SongCandidate], cfg: SingConfig) -> SongCandidate:
+    """Prefer a free QQ recording whose lyric timeline covers the clip window."""
+    probed = False
+    for candidate in candidates:
+        if any(hint in candidate.title.lower() for hint in _INSTRUMENTAL_TITLE_HINTS):
+            continue
+        try:
+            playable = qqmusic.can_play(candidate.url)
+        except Exception:
+            logger.warning("qq probe failed for %s", candidate.url, exc_info=True)
+            continue
+        probed = True
+        if not playable:
+            continue
+        total = candidate.duration_seconds
+        if total > 0:
+            start = min(cfg.start, max(0, total - cfg.duration - 1))
+            if total - start < cfg.duration:
+                continue
+            if qqmusic.window_has_lyrics(candidate.url, start, cfg.duration) is False:
+                continue
+        return candidate
+    if not probed:
+        # Every probe failed at the network level: let download_audio report it.
+        return candidates[0]
+    raise ClientSongError(
+        "QQ 音乐没有找到可翻唱的版本（VIP/数字专辑或指定时间段内没有歌词），"
         "请换一首免费歌曲或调整 start 再试"
     )
 
