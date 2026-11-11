@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 DB_PATH_ENV = "SING_DB_PATH"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _TAG_SPLIT_RE = re.compile(r"[,，、\s]+")
 _MAX_TAGS = 8
@@ -55,6 +55,8 @@ _SCHEMA_STATEMENTS = (
         language       TEXT NOT NULL DEFAULT '',
         gender         TEXT NOT NULL DEFAULT '',
         rvc_version    TEXT NOT NULL DEFAULT '',
+        engine         TEXT NOT NULL DEFAULT 'rvc'
+                       CHECK (engine IN ('rvc', 'svc_ref')),
         tags_json      TEXT NOT NULL DEFAULT '[]',
         description    TEXT NOT NULL DEFAULT '',
         created_at     INTEGER NOT NULL,
@@ -145,6 +147,7 @@ def init_db(path: Path | None = None, legacy_requests: Path | None = None) -> No
             try:
                 for statement in _SCHEMA_STATEMENTS:
                     conn.execute(statement)
+                _migrate(conn)
                 if legacy_requests is not None and _is_empty(conn):
                     _import_legacy(conn, legacy_requests)
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -153,6 +156,20 @@ def init_db(path: Path | None = None, legacy_requests: Path | None = None) -> No
                 conn.execute("ROLLBACK")
                 raise
         _initialized.add(target)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the first schema shipped.
+
+    ``CREATE TABLE IF NOT EXISTS`` does not touch an existing database, so
+    older installs need an explicit ALTER. SQLite allows a NOT NULL column
+    with a constant default, which backfills every existing row as RVC.
+    """
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(voice_requests)")}
+    if "engine" not in columns:
+        conn.execute(
+            "ALTER TABLE voice_requests ADD COLUMN engine TEXT NOT NULL DEFAULT 'rvc'"
+        )
 
 
 def _is_empty(conn: sqlite3.Connection) -> bool:
@@ -233,6 +250,9 @@ def _normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         moderation = "ok"
     name = str(record.get("name") or "").strip().lower()
     label = str(record.get("label") or "").strip() or name
+    engine = str(record.get("engine") or "rvc").strip().lower()
+    if engine not in {"rvc", "svc_ref"}:
+        engine = "rvc"
     return {
         "id": str(record.get("id") or ""),
         "name": name,
@@ -249,6 +269,7 @@ def _normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         "language": str(record.get("language") or "").strip().lower()[:16],
         "gender": str(record.get("gender") or "").strip().lower()[:16],
         "rvc_version": str(record.get("rvc_version") or "").strip().lower()[:16],
+        "engine": engine,
         "tags_json": json.dumps(_clean_tags(record.get("tags")), ensure_ascii=False),
         "description": " ".join(str(record.get("description") or "").split())[:500],
         "created_at": created_at,
@@ -272,8 +293,9 @@ def _upsert_conn(conn: sqlite3.Connection, data: dict[str, Any]) -> None:
         INSERT INTO voice_requests (
             id, name, label, url, flowbee_uid, flowbee_user, source, status,
             visibility, moderation, reason, author_display, language, gender,
-            rvc_version, tags_json, description, created_at, updated_at, published_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            rvc_version, engine, tags_json, description, created_at, updated_at,
+            published_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             label = excluded.label,
@@ -287,6 +309,7 @@ def _upsert_conn(conn: sqlite3.Connection, data: dict[str, Any]) -> None:
             language = excluded.language,
             gender = excluded.gender,
             rvc_version = excluded.rvc_version,
+            engine = excluded.engine,
             tags_json = excluded.tags_json,
             description = excluded.description,
             updated_at = excluded.updated_at
@@ -307,6 +330,7 @@ def _upsert_conn(conn: sqlite3.Connection, data: dict[str, Any]) -> None:
             data["language"],
             data["gender"],
             data["rvc_version"],
+            data["engine"],
             data["tags_json"],
             data["description"],
             data["created_at"],
@@ -583,6 +607,7 @@ def usage_map() -> dict[str, int]:
 
 def _public_row(row: sqlite3.Row) -> dict[str, Any]:
     record = _row_to_record(row)
+    engine = str(record.get("engine") or "rvc")
     return {
         "name": record["name"],
         "label": record["label"],
@@ -592,6 +617,9 @@ def _public_row(row: sqlite3.Row) -> dict[str, Any]:
         "language": record["language"],
         "gender": record["gender"],
         "rvc_version": record["rvc_version"],
+        # Reference voices can be auditioned on the plaza; RVC zips cannot.
+        "preview_url": record["url"] if engine == "svc_ref" else "",
+        "engine": engine,
         "description": record["description"],
         "author": record["author_display"] or "社区投稿",
         "published_at": record["published_at"],

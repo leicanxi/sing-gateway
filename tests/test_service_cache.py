@@ -98,3 +98,19 @@ def test_hit_without_reachable_url_regenerates(
 
     stored = json.loads(next(tmp_path.glob("*.json")).read_text(encoding="utf-8"))
     assert stored["audio_url"] == "https://replicate.delivery/out.mp3"
+
+
+def test_fresh_render_with_audio_base_returns_gateway_url(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """With a public base configured the client never sees a Replicate URL."""
+    _patch_full_render(monkeypatch)
+    cfg = _cfg(tmp_path)
+    url = "https://music.163.com/song?id=3"
+
+    result = service.render_song(url, cfg, audio_base="https://cdn.example/")
+
+    key = cache.cache_key(url, cfg.start, cfg.duration, cfg)
+    assert result.cached is False
+    assert result.audio_url == f"https://cdn.example/v1/sing/audio/{key}.mp3"
+    assert (tmp_path / f"{key}.mp3").read_bytes() == b"gen"

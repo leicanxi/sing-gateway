@@ -1,0 +1,34 @@
+predict: "predict.py:Predictor"
+
+environment:
+  # The Docker build network reaches PyPI/GitHub/HF directly; these only make
+  # the large downloads more resilient. (HF_* and PYTHONPATH are reserved by
+  # Cog and are set inside the Python entrypoints instead.)
+  - "PIP_DEFAULT_TIMEOUT=120"
+  - "PIP_RETRIES=10"
+
+build:
+  gpu: true
+  cuda: "12.1"
+  python_version: "3.10"
+  python_requirements: requirements.txt
+  system_packages:
+    - "ffmpeg"
+    - "libsndfile1"
+    - "git"
+    - "curl"
+  run:
+    # Full clone: a shallow clone cannot check out an older pinned commit once
+    # upstream moves past it.
+    - command: "git clone https://github.com/Soul-AILab/SoulX-Singer.git /src/SoulX-Singer"
+    - command: "git -C /src/SoulX-Singer checkout 81aeb3ae772c70093c3de74dc23c92d983801ae4"
+    # Bake the weights in to keep cold starts fast. predict.py also downloads
+    # anything missing, so a lean build (weights stripped out) still works.
+    - command: >-
+        mkdir -p /src/SoulX-Singer/pretrained_models/SoulX-Singer && curl -fL --retry 30 --retry-delay 5 --retry-all-errors -C - -o /src/SoulX-Singer/pretrained_models/SoulX-Singer/model-svc.pt https://huggingface.co/Soul-AILab/SoulX-Singer/resolve/main/model-svc.pt && curl -fL --retry 30 --retry-delay 5 --retry-all-errors -o /src/SoulX-Singer/pretrained_models/SoulX-Singer/config.yaml https://huggingface.co/Soul-AILab/SoulX-Singer/resolve/main/config.yaml
+    - command: >-
+        mkdir -p /src/SoulX-Singer/pretrained_models/SoulX-Singer-Preprocess/mel-band-roformer-karaoke && curl -fL --retry 30 --retry-delay 5 --retry-all-errors -C - -o /src/SoulX-Singer/pretrained_models/SoulX-Singer-Preprocess/mel-band-roformer-karaoke/mel_band_roformer_karaoke_becruily.ckpt https://huggingface.co/Soul-AILab/SoulX-Singer-Preprocess/resolve/main/mel-band-roformer-karaoke/mel_band_roformer_karaoke_becruily.ckpt && curl -fL --retry 30 --retry-delay 5 --retry-all-errors -o /src/SoulX-Singer/pretrained_models/SoulX-Singer-Preprocess/mel-band-roformer-karaoke/config_karaoke_becruily.yaml https://huggingface.co/Soul-AILab/SoulX-Singer-Preprocess/resolve/main/mel-band-roformer-karaoke/config_karaoke_becruily.yaml
+    - command: >-
+        mkdir -p /src/SoulX-Singer/pretrained_models/SoulX-Singer-Preprocess/rmvpe && curl -fL --retry 30 --retry-delay 5 --retry-all-errors -C - -o /src/SoulX-Singer/pretrained_models/SoulX-Singer-Preprocess/rmvpe/rmvpe.pt https://huggingface.co/Soul-AILab/SoulX-Singer-Preprocess/resolve/main/rmvpe/rmvpe.pt
+    - command: >-
+        python -c "import os; os.environ.setdefault('HF_HOME', '/src/hf'); from transformers import WhisperFeatureExtractor, WhisperModel; WhisperFeatureExtractor.from_pretrained('openai/whisper-base'); WhisperModel.from_pretrained('openai/whisper-base')"

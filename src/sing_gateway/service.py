@@ -19,6 +19,7 @@ from sing_gateway.config import (
     AUTO_SOURCE_ORDER,
     MUSIC_SOURCES,
     PITCH_MODES,
+    SVC_ENGINE,
     VOLUME_MAX,
     VOLUME_MIN,
     ClientSongError,
@@ -71,16 +72,43 @@ def _resolve_token(cfg: SingConfig) -> str:
     return token
 
 
+def cached_audio_url(audio_base: str, key: str) -> str:
+    """Public URL served by the gateway itself for one cache entry.
+
+    Unlike a Replicate delivery URL this does not expire: the mp3 on disk is
+    the artifact, and the key is a 128-bit hash of the render parameters.
+    """
+    return f"{audio_base.rstrip('/')}/v1/sing/audio/{key}.mp3"
+
+
+def _looks_like_audio(content: bytes, content_type: str) -> bool:
+    if content[:4] == b"RIFF" and content[8:12] == b"WAVE":
+        return True
+    if content[:4] in {b"fLaC", b"OggS"}:
+        return True
+    if content[:3] == b"ID3":
+        return True
+    if len(content) > 1 and content[0] == 0xFF and content[1] & 0xE0 == 0xE0:
+        return True
+    return content_type.lower().startswith("audio/")
+
+
 def _url_reachable(url: str, timeout: float = 10.0) -> bool:
-    """Check that a cached public audio URL still serves before returning it."""
+    """Check that a cached public audio URL still serves audio.
+
+    A status code alone is not enough: Replicate serves its 39-byte
+    ``{"detail": "requested file not found"}`` page with HTTP 200/206 once
+    Cloudflare has cached it, so expired links look healthy. Read the first
+    bytes and require audio magic or an audio content type.
+    """
     try:
-        with httpx.Client(
-            timeout=timeout, follow_redirects=True, headers={"Range": "bytes=0-0"}
-        ) as client:
-            response = client.head(url)
-            if response.status_code in (405, 501):
-                response = client.get(url)
-            return response.status_code < 400
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            response = client.get(url, headers={"Range": "bytes=0-63"})
+            if response.status_code >= 400:
+                return False
+            return _looks_like_audio(
+                response.content[:64], str(response.headers.get("content-type") or "")
+            )
     except Exception:
         return False
 
@@ -110,27 +138,35 @@ def search_songs(query: str, limit: int = 3, source: str = "bilibili") -> list[S
     return bilibili.search_bilibili(query, limit)
 
 
-def render_song(url: str, cfg: SingConfig, artist: str = "") -> SingResult:
+def render_song(url: str, cfg: SingConfig, artist: str = "", audio_base: str = "") -> SingResult:
     """Generate one short cover for an already-resolved Bilibili/audio URL.
 
-    Cache hits only re-upload the cached mp3 to Replicate Files, so they return
-    a fresh public URL in about a second without running the model.
+    With ``audio_base`` the result points at the gateway's own copy of the
+    mp3 (``/v1/sing/audio/<key>.mp3``), so cache hits return instantly and
+    never hand out a Replicate delivery URL that expires after an hour.
     """
     cfg = _normalized(cfg)
     pitch_auto = False
     if cfg.pitch_mode == AUTO_PITCH_MODE:
-        semitones, pitch_auto = pitch.resolve_pitch(
-            artist, cfg.voice_label, cfg.voice_gender, cfg.pitch
-        )
-        # Resolve to a concrete whole-mix shift: the model never sees "auto".
-        cfg = replace(cfg, pitch=semitones, pitch_mode="no-change")
-        logger.info(
-            "auto pitch %+d semitones (artist=%r, voice=%r, resolved=%s)",
-            semitones,
-            artist,
-            cfg.voice_label,
-            pitch_auto,
-        )
+        if cfg.voice_engine == SVC_ENGINE:
+            # SoulX matches the two registers from the reference and target F0
+            # medians. Running the gender classifier first would only add an
+            # LLM call and a heuristic layer the model already supersedes.
+            pitch_auto = True
+            cfg = replace(cfg, pitch=0, pitch_mode="no-change", svc_auto_shift=True)
+        else:
+            semitones, pitch_auto = pitch.resolve_pitch(
+                artist, cfg.voice_label, cfg.voice_gender, cfg.pitch
+            )
+            # Resolve to a concrete whole-mix shift: the model never sees "auto".
+            cfg = replace(cfg, pitch=semitones, pitch_mode="no-change")
+            logger.info(
+                "auto pitch %+d semitones (artist=%r, voice=%r, resolved=%s)",
+                semitones,
+                artist,
+                cfg.voice_label,
+                pitch_auto,
+            )
     token = _resolve_token(cfg)
     base_url = cfg.replicate_base_url.rstrip("/")
     root = cache.cache_root(cfg)
@@ -138,25 +174,41 @@ def render_song(url: str, cfg: SingConfig, artist: str = "") -> SingResult:
     cached = cache.cache_lookup(root, key, cfg.cache_ttl_hours)
     if cached is not None:
         audio, meta = cached
-        # Hits must return a publicly playable URL: the original delivery link
-        # is stored in the cache meta. Replicate Files URLs need auth, and old
-        # entries predate the field — both regenerate below.
+        filename = str(meta.get("filename") or "cover.mp3")
+        duration = int(meta.get("duration_seconds") or cfg.duration)
+        if audio_base:
+            # The local mp3 is the artifact; never hand out the Replicate URL
+            # stored in the meta, which Replicate deletes after an hour.
+            logger.info("sing cache hit %s", key)
+            return SingResult(
+                cached_audio_url(audio_base, key),
+                filename,
+                True,
+                duration_seconds=duration,
+                pitch=cfg.pitch,
+                pitch_auto=pitch_auto,
+                engine=cfg.voice_engine,
+            )
+        # No public gateway base configured: fall back to the original delivery
+        # URL when it still serves audio, otherwise regenerate below.
         public_url = str(meta.get("audio_url") or "").strip()
         if public_url and _url_reachable(public_url):
             logger.info("sing cache hit %s", key)
             return SingResult(
                 public_url,
-                str(meta.get("filename") or "cover.mp3"),
+                filename,
                 True,
-                duration_seconds=int(meta.get("duration_seconds") or cfg.duration),
+                duration_seconds=duration,
                 pitch=cfg.pitch,
                 pitch_auto=pitch_auto,
+                engine=cfg.voice_engine,
             )
         logger.info("sing cache entry has no playable url; regenerating %s", key)
         audio.unlink(missing_ok=True)
         audio.with_suffix(".json").unlink(missing_ok=True)
 
     workdir = Path(tempfile.mkdtemp(prefix="octop-sing-"))
+    stored = False
     try:
         if netease.is_netease_url(url):
             source, title, total = netease.download_audio(url, workdir)
@@ -172,7 +224,12 @@ def render_song(url: str, cfg: SingConfig, artist: str = "") -> SingResult:
         clip = workdir / "clip.wav"
         media.trim_audio(source, clip, start, cfg.duration)
         audio_url = replicate.upload_file(base_url, token, clip)
-        output_url = replicate.predict_cover(base_url, token, audio_url, cfg)
+        if cfg.voice_engine == SVC_ENGINE:
+            # The reference clip is already a public URL, so only the target
+            # clip is uploaded. The Cog separates, extracts F0 and mixes.
+            output_url = replicate.predict_svc(base_url, token, audio_url, cfg)
+        else:
+            output_url = replicate.predict_cover(base_url, token, audio_url, cfg)
         filename = media.safe_filename(title)
         try:
             generated = media.fetch_output(output_url, workdir)
@@ -184,20 +241,25 @@ def render_song(url: str, cfg: SingConfig, artist: str = "") -> SingResult:
                     "filename": filename,
                     "audio_url": output_url,
                     "duration_seconds": clip_seconds,
+                    "engine": cfg.voice_engine,
                 },
                 cfg.cache_max_entries,
             )
+            stored = True
         except Exception:
             logger.warning("sing cache store failed", exc_info=True)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+    # Only advertise the gateway URL when the mp3 actually landed in the cache.
+    public_url = cached_audio_url(audio_base, key) if (audio_base and stored) else output_url
     return SingResult(
-        output_url,
+        public_url,
         filename,
         cached=False,
         duration_seconds=clip_seconds,
         pitch=cfg.pitch,
         pitch_auto=pitch_auto,
+        engine=cfg.voice_engine,
     )
 
 
@@ -385,11 +447,11 @@ def _pick_qq_candidate(candidates: list[SongCandidate], cfg: SingConfig) -> Song
     )
 
 
-def render_song_by_query(song: str, cfg: SingConfig) -> SingResult:
+def render_song_by_query(song: str, cfg: SingConfig, audio_base: str = "") -> SingResult:
     """Search for *song* and generate a cover from the best-matching result."""
     pick = _pick_candidate(song, cfg)
     # The artist doubles as the pitch_mode=auto source-gender hint.
-    result = render_song(pick.candidate.url, cfg, artist=pick.candidate.artist)
+    result = render_song(pick.candidate.url, cfg, artist=pick.candidate.artist, audio_base=audio_base)
     # Carry the picked title/artist so clients can show which version was used,
     # and whether it is the requested singer or a free stand-in.
     return replace(

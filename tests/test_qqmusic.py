@@ -353,7 +353,7 @@ def test_render_by_query_discloses_the_stand_in(monkeypatch: MonkeyPatch) -> Non
     monkeypatch.setattr(
         service,
         "render_song",
-        lambda url, cfg, artist="": SingResult("https://cdn/a.mp3", "a.mp3"),
+        lambda url, cfg, artist="", audio_base="": SingResult("https://cdn/a.mp3", "a.mp3"),
     )
 
     block = service.render_song_by_query("晴天", SingConfig()).as_block()

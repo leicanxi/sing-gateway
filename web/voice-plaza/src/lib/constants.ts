@@ -95,6 +95,7 @@ export function voiceChips(voice: Voice, limit = 4): VoiceChip[] {
   }
   if (voice.gender) push(GENDER_LABEL[voice.gender] ?? '');
   if (voice.type === 'instrumental') push('乐器');
+  if (voice.engine === 'svc_ref') push('零样本', true);
   if (voice.rvc_version) push(String(voice.rvc_version).toUpperCase());
   for (const raw of voice.tags ?? []) push(String(raw ?? ''));
 

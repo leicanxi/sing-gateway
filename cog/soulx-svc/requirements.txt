@@ -1,0 +1,23 @@
+# Subset of the upstream requirements that the SVC path actually imports.
+# funasr / nemo / ToJyutping are only needed for lyric+MIDI transcription,
+# which SVC never uses, so they are deliberately absent.
+torch==2.2.0
+torchaudio==2.2.0
+numpy==1.26.4
+librosa==0.11.0
+soundfile==0.13.1
+scipy==1.15.3
+transformers==4.41.2
+accelerate==1.11.0
+omegaconf==2.3.0
+ml_collections==1.1.0
+loralib==0.1.2
+wandb==0.24.2
+matplotlib==3.10.8
+PyYAML==6.0.2
+tqdm==4.67.1
+einops==0.8.2
+beartype==0.22.9
+rotary_embedding_torch==0.8.9
+huggingface_hub>=0.20
+safetensors

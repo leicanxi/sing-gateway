@@ -286,7 +286,7 @@ export function AccountPage() {
           <div className="rounded-2xl border border-dashed border-border bg-surface px-6 py-14 text-center">
             <p className="text-[14px] font-semibold">还没有提交过音色</p>
             <p className="mx-auto mt-1.5 max-w-sm text-[12.5px] leading-relaxed text-muted">
-              上传自己的 RVC 模型，审核通过后会生成一个专属音色名。
+              上传自己的 RVC 模型或一段参考音频，审核通过后会生成一个专属音色名。
             </p>
             <Button
               className="mt-4 gap-1.5 !bg-foreground !text-background hover:!bg-foreground/85"

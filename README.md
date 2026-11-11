@@ -64,9 +64,15 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 |----------|---------|---------|
 | `SING_GATEWAY_TOKEN` | — | Required shared secret; new-api's channel key must match |
 | `REPLICATE_API_TOKEN` | — | Required; the operator's Replicate account |
-| `SING_VOICE_URL` | built-in Keine zip | RVC voice model zip |
+| `SING_VOICE_URL` | built-in Keine zip | Default voice asset: an RVC zip or a reference clip (engine inferred from the extension) |
 | `SING_REPLICATE_MODEL` | `zsxkib/realistic-voice-cloning` | Cover model |
 | `SING_REPLICATE_VERSION` | latest | Pin a Replicate version |
+| `SING_SVC_MODEL` | `leicanxi/soulx-singer-svc` | Replicate Cog used by [reference-clip voices](#zero-shot-reference-voices) |
+| `SING_SVC_VERSION` | latest | Pin a Cog version |
+| `SING_SVC_N_STEPS` | `32` | Flow-matching steps for the SVC Cog |
+| `SING_SVC_CFG` | `3.0` | Classifier-free guidance for the SVC Cog |
+| `SING_SVC_SEED` | `42` | SVC sampling seed; a cache hit requires the same value |
+| `SING_SVC_RANDOM_SEED` | off | Draw a new seed per render (persistent cache stops hitting) |
 | `SING_REPLICATE_BASE_URL` | `https://api.replicate.com/v1` | Replicate API base |
 | `SING_PITCH` | `2` | Default semitone shift |
 | `SING_START` | `60` | Default clip start (seconds) |
@@ -81,6 +87,7 @@ Defaults to `127.0.0.1:9001`. A systemd unit and a whitelist example live in
 | `SING_STRICT_SOURCE` | off | Refuse a free recording by another artist when the requested one is paid (see song-choice policy below) |
 | `SING_CACHE_TTL_HOURS` | `168` | Disk cache TTL |
 | `SING_CACHE_MAX_ENTRIES` | `50` | Disk cache entries (up to 5000) |
+| `SING_AUDIO_BASE_URL` | falls back to `SING_PUBLIC_BASE_URL` | Public origin for cached-audio URLs (`{base}/v1/sing/audio/<key>.mp3`). Set it when the gateway sits behind new-api; otherwise the request host is the docker bridge. Self-hosted installs can leave it empty and use the request host. |
 | `SING_MAX_CONCURRENCY` | `2` | Concurrent background renders; extra jobs queue |
 | `SING_JOB_TTL_SECONDS` | `3600` | Finished job rows kept for status polling |
 | `SING_VOICES_FILE` | `~/.octop/sing-voices.json` | Admin-managed voice whitelist |
@@ -252,6 +259,58 @@ optional `gender` field feeds [`pitch_mode=auto`](#key-selection-pitch_modeauto)
 when it is missing the gateway falls back to the gender cache and then to the
 optional classifier.
 
+### Zero-shot reference voices
+
+A voice entry whose URL is an audio file (`.wav`, `.mp3`, `.flac`, `.m4a`,
+`.ogg`, `.aac`) is a **reference voice**: nothing is trained and no `.pth` is
+produced. The clip itself is the voice, and every render passes it to the
+SoulX-Singer-SVC Cog alongside the target clip. An explicit
+`"engine": "svc_ref"` also works when the storage URL has no useful suffix.
+
+```json
+{
+  "my-voice-a1b2": {
+    "label": "我的声音",
+    "url": "https://cdn.example.com/my-voice-a1b2.mp3",
+    "gender": "female"
+  }
+}
+```
+
+- `pitch_mode=auto` sends `auto_shift=true` and lets SoulX match the reference
+  and target registers from their F0 medians; the gender classifier is skipped.
+  An explicit `pitch_mode` / `pitch` still works as a manual shift.
+- The audio block reports `"engine": "svc_ref"` so clients can label the tier.
+- Cache keys include the clip URL and the SVC knobs, so replacing the clip or
+  changing `n_steps` / seed starts a new entry.
+- `backup_vocals_volume` is ignored for this engine; the 2-stem karaoke
+  separation folds harmony into vocals or accompaniment. See
+  [`cog/soulx-svc/README.md`](cog/soulx-svc/README.md#known-limitations-v1).
+
+Build and push the Cog from [`cog/soulx-svc/`](cog/soulx-svc/), then point
+`SING_SVC_MODEL` at the published model. The published image keeps the 3.5GB
+of SVC/separator/F0 weights out of the image and downloads them on the first
+cold start (~5 minutes); a warm container renders a 4-minute clip in about 3
+minutes.
+
+The existing submission endpoint accepts reference clips too:
+
+```http
+POST /v1/voice-requests        (multipart)
+label=我的声音
+engine=svc_ref
+consent=1
+gender=female
+file=@reference.wav
+```
+
+The server decodes the file with ffmpeg, caps it at 30 seconds, re-encodes it
+to mono 44.1k mp3, and rejects anything shorter than 5 seconds or undecodable
+(`SING_UPLOAD_MAX_MB` still applies, capped at 12MB for clips). `consent=1` is
+required for reference clips: the uploader confirms they have the right to use
+the recording. RVC zip submissions leave `engine` empty and behave exactly as
+before.
+
 **Public catalog** — machine-scraped community models, browsable on the voice
 plaza and selectable by name:
 
@@ -378,9 +437,11 @@ results report `unknown` because their artist field is the uploader.
 - Statuses: `queued`, `running`, `succeeded`, `failed` (`failed` carries
   `error`). Clients poll every few seconds; `SING_JOB_TTL_SECONDS` keeps
   finished rows around for late polls.
-- Identical submissions share one job (same song/url + artist + voice +
-  start/duration + pitch mode + mixing gains), so double-clicks and retries do
-  not re-render.
+- Identical submissions share one job while it is still `queued` or `running`
+  (same song/url + artist + voice + start/duration + pitch mode + mixing
+  gains), so double-clicks and in-flight retries do not re-render. Once a job
+  has finished, a repeat request starts a new job that hits the disk cache in
+  about a second and returns the same stable audio URL.
 - Only `SING_MAX_CONCURRENCY` renders run at once; the rest wait in `queued`.
 - `duration_seconds` is the actual clip length (a VIP preview can be shorter
   than the requested duration) and `cached` marks a disk-cache hit. Both let a
@@ -643,12 +704,24 @@ or plain text (`雨爱`). Plain text is treated as the song name.
   offers WAV as an alternative, whose ~10 MB/minute URLs are too large for QQ
   voice/file sends. Raising that ceiling means running our own inference
   pipeline instead of `zsxkib/realistic-voice-cloning`.
-- Returned audio URLs are Replicate delivery URLs (public), so QQ can fetch
-  them directly. Cache hits return the original public delivery URL stored in
-  the cache entry (validated with a HEAD request; stale or pre-upgrade entries
-  regenerate once and refresh the stored URL).
+- Returned audio URLs point at the gateway's own cache entry
+  (`{SING_AUDIO_BASE_URL}/v1/sing/audio/<key>.mp3`), so QQ and AstrBot fetch
+  them directly and they stay valid until the entry is evicted. The endpoint
+  is intentionally token-free; the key is a 128-bit hash of the render
+  parameters, so entries cannot be enumerated. This replaced Replicate
+  delivery URLs: Replicate deletes those after an hour, and its 39-byte
+  `{"detail": "requested file not found"}` page can be served with HTTP
+  200/206, which made status-only validity checks useless.
+- Cache entries are written atomically, so the audio endpoint never serves a
+  half-written mp3. A stale/pre-upgrade entry without a local file regenerates
+  once and refreshes the cache.
 - Cache hits still count as one new-api call unless you create a separate
   lower-priced model for them.
+- Voice model and reference-clip URLs are percent-encoded before they are
+  handed to Replicate. ModelScope/Hugging Face keep the uploaded file's
+  Chinese name in the path, and AICoverGen downloads the zip with `urllib`,
+  whose request line must be ASCII (`'ascii' codec can't encode characters …`).
+  Already-encoded URLs are left untouched.
 - Keep `sing-song` at or above 0.7 per call under the 1:1 convention; typical
   cost is $0.016–0.054 and the cache hit cost is near zero.
 

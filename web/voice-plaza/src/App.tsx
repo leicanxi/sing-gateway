@@ -586,7 +586,7 @@ export default function App() {
         <SparkIcon className="mx-auto size-6 text-muted/70" />
         <p className="mt-3 text-sm font-semibold">还没有公开的音色</p>
         <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-relaxed text-muted">
-          上传自己的 RVC 模型，审核通过后选择公开，就会出现在这里。
+          上传自己的 RVC 模型或一段参考音频，审核通过后选择公开，就会出现在这里。
         </p>
         <Button
           className="mt-4 !bg-foreground !text-background hover:!bg-foreground/85"
@@ -705,7 +705,7 @@ export default function App() {
               <div>
                 <p className="text-[13px] font-semibold">音色广场</p>
                 <p className="mt-1 text-xs text-muted">
-                  社区分享的 RVC 音色目录 · 网关源码{' '}
+                  社区分享的音色目录 · 网关源码{' '}
                   <a
                     className="text-accent hover:underline"
                     href="https://github.com/leicanxi/sing-gateway"

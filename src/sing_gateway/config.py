@@ -9,6 +9,16 @@ from typing import Any
 DEFAULT_VOICE_URL = "https://huggingface.co/leicanxi/rvc-models/resolve/main/keine_genso_flat.zip"
 DEFAULT_REPLICATE_BASE = "https://api.replicate.com/v1"
 DEFAULT_MODEL = "zsxkib/realistic-voice-cloning"
+# Zero-shot reference-clip voice conversion (our own Cog around
+# Soul-AILab/SoulX-Singer-SVC). Publish it under the operator's account and
+# point SING_SVC_MODEL at it.
+DEFAULT_SVC_MODEL = "leicanxi/soulx-singer-svc"
+RVC_ENGINE = "rvc"
+SVC_ENGINE = "svc_ref"
+VOICE_ENGINES = frozenset({RVC_ENGINE, SVC_ENGINE})
+# A voice entry whose URL ends in one of these is a reference clip, not a
+# trained RVC zip. Explicit ``engine`` in the JSON wins over the suffix.
+REFERENCE_AUDIO_SUFFIXES = frozenset({".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac"})
 PITCH_MODES = frozenset({"no-change", "male-to-female", "female-to-male"})
 # Not a model value: the gateway resolves it to semitones from the song's
 # artist and the chosen voice, then sends the model a plain key shift.
@@ -54,8 +64,20 @@ class SingConfig:
     """Provider-neutral knobs for one cover generation."""
 
     voice_model_url: str = DEFAULT_VOICE_URL
+    # ``rvc`` downloads voice_model_url as a trained .pth zip. ``svc_ref``
+    # treats it as a 5–30s clean reference clip for the zero-shot model.
+    voice_engine: str = RVC_ENGINE
     model: str = DEFAULT_MODEL
     model_version: str = ""
+    svc_model: str = DEFAULT_SVC_MODEL
+    svc_model_version: str = ""
+    svc_n_steps: int = 32
+    svc_cfg: float = 3.0
+    svc_seed: int = 42
+    svc_random_seed: bool = False
+    # Set when pitch_mode=auto: let SoulX match the reference/target registers
+    # from their F0 medians instead of pre-resolving a semitone count.
+    svc_auto_shift: bool = False
     replicate_base_url: str = DEFAULT_REPLICATE_BASE
     replicate_token: str = ""
     pitch: int = 2
@@ -98,6 +120,9 @@ class SingResult:
     # (Bilibili uploads, where the artist field is the uploader).
     source_match: str = ""
     original_artist: str = ""
+    # "rvc" or "svc_ref"; lets the client tell a trained model from a
+    # zero-shot reference clip without another lookup.
+    engine: str = ""
 
     def as_block(self) -> dict[str, Any]:
         block: dict[str, Any] = {
@@ -125,4 +150,6 @@ class SingResult:
             block["source_match"] = self.source_match
         if self.original_artist:
             block["original_artist"] = self.original_artist
+        if self.engine:
+            block["engine"] = self.engine
         return block

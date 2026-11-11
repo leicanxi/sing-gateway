@@ -193,3 +193,37 @@ def test_payload_mutes_stems_by_default(monkeypatch: pytest.MonkeyPatch) -> None
     payload_input = captured["input"]
     assert payload_input["instrumental_volume_change"] == -60
     assert payload_input["backup_vocals_volume_change"] == -60
+
+
+def test_chinese_voice_url_is_percent_encoded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """urllib inside AICoverGen dies on a non-ASCII request line."""
+    captured: dict[str, Any] = {}
+
+    class _CaptureClient(_FakeClient):
+        def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+            if isinstance(kwargs.get("json"), dict):
+                captured.update(kwargs["json"])
+            return super().post(url, **kwargs)
+
+    monkeypatch.setattr(
+        replicate.httpx,
+        "Client",
+        lambda **kwargs: _CaptureClient({"status": "succeeded", "output": ["https://x/out.mp3"]}),
+    )
+    monkeypatch.setattr(replicate.time, "sleep", lambda seconds: None)
+    raw = (
+        "https://modelscope.cn/models/leicanxi/rvc-voice-uploads/resolve/master/"
+        "uploads/纳西妲-2dab.zip"
+    )
+    replicate.predict_cover(
+        "https://api.replicate.com/v1",
+        "r8_test",
+        "https://x/song.mp3",
+        SingConfig(replicate_token="r8_test", model_version="v-test", voice_model_url=raw),
+    )
+
+    url = captured["input"]["custom_rvc_model_download_url"]
+    assert url.endswith("/uploads/%E7%BA%B3%E8%A5%BF%E5%A6%B2-2dab.zip")
+    url.encode("ascii")  # must not raise
+    # An already-encoded URL must not be encoded twice.
+    assert replicate._ascii_url(url) == url

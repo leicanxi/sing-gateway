@@ -20,6 +20,8 @@ import type { Account } from '../lib/types';
 import { CheckIcon, CopyIcon, UploadIcon } from './icons';
 
 const MAX_BYTES = 300 * 1024 * 1024;
+const REFERENCE_MAX_BYTES = 12 * 1024 * 1024;
+const AUDIO_FILE_RE = /\.(wav|mp3|flac|m4a|ogg|aac)$/i;
 
 const LANGUAGES = [
   { value: 'none', label: '未指定' },
@@ -92,6 +94,9 @@ function ShareRow({ label, value }: { label: string; value: string }) {
 
 export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps) {
   const [label, setLabel] = useState('');
+  const [engine, setEngine] = useState<'rvc' | 'svc_ref'>('rvc');
+  const [clipSeconds, setClipSeconds] = useState<number | null>(null);
+  const [consent, setConsent] = useState(false);
   const [description, setDescription] = useState('');
   const [language, setLanguage] = useState('none');
   const [gender, setGender] = useState('none');
@@ -117,6 +122,9 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
 
   const reset = () => {
     setLabel('');
+    setEngine('rvc');
+    setClipSeconds(null);
+    setConsent(false);
     setDescription('');
     setLanguage('none');
     setGender('none');
@@ -136,6 +144,42 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
     onOpenChange(next);
   };
 
+  const chooseEngine = (next: 'rvc' | 'svc_ref') => {
+    if (engine === next) return;
+    setEngine(next);
+    setMode('file');
+    setFile(null);
+    setUploadItems([]);
+    setUrl('');
+    setClipSeconds(null);
+    setConsent(false);
+    setError('');
+  };
+
+  const inspectClip = (nextFile: File | null) => {
+    setClipSeconds(null);
+    setError('');
+    if (!nextFile) return;
+    const audio = document.createElement('audio');
+    const objectUrl = URL.createObjectURL(nextFile);
+    const cleanup = () => URL.revokeObjectURL(objectUrl);
+    audio.preload = 'metadata';
+    audio.onloadedmetadata = () => {
+      cleanup();
+      const seconds = audio.duration;
+      if (!Number.isFinite(seconds)) return;
+      setClipSeconds(seconds);
+      if (seconds < 5) {
+        setError(`参考音频太短（${seconds.toFixed(1)} 秒），至少需要 5 秒`);
+      }
+    };
+    audio.onerror = () => {
+      cleanup();
+      setError('无法读取这段音频，请换一个可播放的文件');
+    };
+    audio.src = objectUrl;
+  };
+
   const validate = (): boolean => {
     if (!label.trim()) {
       setError('请填写音色显示名');
@@ -143,19 +187,38 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
     }
     if (mode === 'file') {
       if (!file) {
-        setError('请选择要上传的 zip 文件');
+        setError(engine === 'svc_ref' ? '请选择参考音频文件' : '请选择要上传的 zip 文件');
         return false;
       }
-      if (!/\.zip$/i.test(file.name)) {
-        setError('仅支持 .zip 文件');
-        return false;
-      }
-      if (file.size > MAX_BYTES) {
-        setError('文件超过 300MB 上限');
-        return false;
+      if (engine === 'svc_ref') {
+        if (!AUDIO_FILE_RE.test(file.name)) {
+          setError('参考音频仅支持 wav / mp3 / flac / m4a / ogg / aac');
+          return false;
+        }
+        if (file.size > REFERENCE_MAX_BYTES) {
+          setError('参考音频超过 12MB 上限');
+          return false;
+        }
+        if (clipSeconds !== null && clipSeconds < 5) {
+          setError('参考音频太短，至少需要 5 秒连续清唱');
+          return false;
+        }
+      } else {
+        if (!/\.zip$/i.test(file.name)) {
+          setError('仅支持 .zip 文件');
+          return false;
+        }
+        if (file.size > MAX_BYTES) {
+          setError('文件超过 300MB 上限');
+          return false;
+        }
       }
     } else if (!/^https?:\/\//i.test(url.trim())) {
       setError('请填写 http/https 直链');
+      return false;
+    }
+    if (engine === 'svc_ref' && !consent) {
+      setError('请确认你拥有这段录音的使用权');
       return false;
     }
     setError('');
@@ -166,6 +229,8 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
     if (submitting || !validate()) return;
 
     const body = new FormData();
+    body.append('engine', engine);
+    if (engine === 'svc_ref') body.append('consent', consent ? '1' : '0');
     body.append('label', label.trim());
     body.append('description', description.trim());
     body.append('language', language === 'none' ? '' : language);
@@ -288,7 +353,11 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
                     <p
                       className={`text-[14px] font-semibold ${approved ? 'text-accent' : 'text-danger'}`}
                     >
-                      {approved ? '审核通过，音色已可用' : '未通过审核'}
+                      {approved
+                        ? engine === 'svc_ref'
+                          ? '参考音色已可用（无需训练）'
+                          : '审核通过，音色已可用'
+                        : '未通过审核'}
                     </p>
                     {result.reason && (
                       <p className="mt-1 text-[12.5px] leading-relaxed text-muted">
@@ -423,7 +492,47 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
                   </TextField>
 
                   <div className="space-y-2">
-                    <span className="block text-[12.5px] font-medium">模型来源</span>
+                    <span className="block text-[12.5px] font-medium">音色类型</span>
+                    <div className="inline-flex rounded-xl border border-border bg-surface-secondary p-1">
+                      <button
+                        className="mode-btn"
+                        data-active={engine === 'rvc'}
+                        onClick={() => chooseEngine('rvc')}
+                        type="button"
+                      >
+                        RVC 模型（.pth）
+                      </button>
+                      <button
+                        className="mode-btn"
+                        data-active={engine === 'svc_ref'}
+                        onClick={() => chooseEngine('svc_ref')}
+                        type="button"
+                      >
+                        参考音频（零样本）
+                      </button>
+                    </div>
+                    <p className="text-[11.5px] leading-relaxed text-muted">
+                      {engine === 'svc_ref'
+                        ? '上传 5–30 秒单人清唱即可，不用训练；音色相似度取决于这段录音的质量。'
+                        : '上传训练好的 RVC 模型 zip，声音更像，但需要自己先训练。'}
+                    </p>
+                    {engine === 'svc_ref' && (
+                      <label className="flex items-start gap-2 text-[11.5px] leading-relaxed text-muted">
+                        <input
+                          checked={consent}
+                          className="mt-0.5 size-3.5 shrink-0 accent-foreground"
+                          onChange={(event) => setConsent(event.target.checked)}
+                          type="checkbox"
+                        />
+                        <span>我确认有权使用这段录音，且不会用于冒充他人。</span>
+                      </label>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <span className="block text-[12.5px] font-medium">
+                      {engine === 'svc_ref' ? '音频来源' : '模型来源'}
+                    </span>
                     <div className="inline-flex rounded-xl border border-border bg-surface-secondary p-1">
                       <button
                         className="mode-btn"
@@ -431,7 +540,7 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
                         onClick={() => setMode('file')}
                         type="button"
                       >
-                        上传 zip 文件
+                        {engine === 'svc_ref' ? '上传音频文件' : '上传 zip 文件'}
                       </button>
                       <button
                         className="mode-btn"
@@ -439,37 +548,65 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
                         onClick={() => setMode('url')}
                         type="button"
                       >
-                        提供模型直链
+                        {engine === 'svc_ref' ? '提供音频直链' : '提供模型直链'}
                       </button>
                     </div>
 
                     {mode === 'file' ? (
-                      <FileUpload
-                        accept=".zip,application/zip"
-                        browseLabel="选择文件"
-                        description="仅支持 .zip，最大 300MB；需包含 .pth 权重（.index 可选）。"
-                        maxFiles={1}
-                        onFilesAdded={(next, added) => {
-                          setUploadItems(next);
-                          setFile(added[0] ?? null);
-                        }}
-                        onRemove={() => {
-                          setUploadItems([]);
-                          setFile(null);
-                        }}
-                        title="上传 RVC 模型 zip"
-                        value={uploadItems}
-                      />
+                      engine === 'svc_ref' ? (
+                        <FileUpload
+                          accept=".wav,.mp3,.flac,.m4a,.ogg,.aac,audio/*"
+                          browseLabel="选择音频"
+                          description="5–30 秒、单人、无伴奏、低混响；超过 30 秒只取前 30 秒。"
+                          maxFiles={1}
+                          onFilesAdded={(next, added) => {
+                            setUploadItems(next);
+                            const picked = added[0] ?? null;
+                            setFile(picked);
+                            inspectClip(picked);
+                          }}
+                          onRemove={() => {
+                            setUploadItems([]);
+                            setFile(null);
+                            setClipSeconds(null);
+                          }}
+                          title="上传参考音频"
+                          value={uploadItems}
+                        />
+                      ) : (
+                        <FileUpload
+                          accept=".zip,application/zip"
+                          browseLabel="选择文件"
+                          description="仅支持 .zip，最大 300MB；需包含 .pth 权重（.index 可选）。"
+                          maxFiles={1}
+                          onFilesAdded={(next, added) => {
+                            setUploadItems(next);
+                            setFile(added[0] ?? null);
+                          }}
+                          onRemove={() => {
+                            setUploadItems([]);
+                            setFile(null);
+                          }}
+                          title="上传 RVC 模型 zip"
+                          value={uploadItems}
+                        />
+                      )
                     ) : (
-                      <TextField
-                        onChange={setUrl}
-                        type="url"
-                        value={url}
-                      >
-                        <Label className="sr-only">模型直链</Label>
-                        <Input placeholder="https://huggingface.co/…/resolve/main/model.zip" />
+                      <TextField onChange={setUrl} type="url" value={url}>
+                        <Label className="sr-only">
+                          {engine === 'svc_ref' ? '音频直链' : '模型直链'}
+                        </Label>
+                        <Input
+                          placeholder={
+                            engine === 'svc_ref'
+                              ? 'https://example.com/reference.mp3'
+                              : 'https://huggingface.co/…/resolve/main/model.zip'
+                          }
+                        />
                         <p className="mt-1.5 text-[11.5px] text-muted">
-                          需要可公开下载的 zip 直链（HF / ModelScope 的 resolve 链接等）。
+                          {engine === 'svc_ref'
+                            ? '需要可直接播放的音频直链；服务端会下载、截取前 30 秒并重新编码。'
+                            : '需要可公开下载的 zip 直链（HF / ModelScope 的 resolve 链接等）。'}
                         </p>
                       </TextField>
                     )}

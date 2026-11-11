@@ -33,8 +33,15 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-from sing_gateway.config import DEFAULT_VOICE_URL
+from sing_gateway.config import (
+    DEFAULT_VOICE_URL,
+    REFERENCE_AUDIO_SUFFIXES,
+    RVC_ENGINE,
+    SVC_ENGINE,
+    VOICE_ENGINES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +63,12 @@ class VoiceSpec:
     # "male"/"female" when the entry declares it; auto pitch uses it to decide
     # whether a cover needs an octave shift.
     gender: str = ""
+    # "rvc" (url is a trained .pth zip) or "svc_ref" (url is a reference clip).
+    engine: str = RVC_ENGINE
+
+    @property
+    def is_reference(self) -> bool:
+        return self.engine == SVC_ENGINE
 
 
 def _home() -> Path:
@@ -100,16 +113,35 @@ def normalize_gender(value: Any) -> str:
     return ""
 
 
+def infer_engine(url: str, explicit: Any = "") -> str:
+    """Resolve how to use a voice URL: trained RVC zip or reference clip.
+
+    An explicit ``engine`` in the JSON wins, because storage URLs often have no
+    useful suffix. Otherwise a plain audio extension means a reference clip and
+    everything else keeps the historical RVC behaviour.
+    """
+    value = str(explicit or "").strip().lower()
+    if value in VOICE_ENGINES:
+        return value
+    suffix = Path(urlparse(str(url or "")).path).suffix.lower()
+    return SVC_ENGINE if suffix in REFERENCE_AUDIO_SUFFIXES else RVC_ENGINE
+
+
 def _parse_entry(name: str, value: Any) -> VoiceSpec | None:
     if isinstance(value, str) and value.strip():
-        return VoiceSpec(name=name, label=name, url=value.strip())
+        url = value.strip()
+        return VoiceSpec(name=name, label=name, url=url, engine=infer_engine(url))
     if isinstance(value, dict):
         url = str(value.get("url") or "").strip()
         if not url:
             return None
         label = str(value.get("label") or name).strip() or name
         return VoiceSpec(
-            name=name, label=label, url=url, gender=normalize_gender(value.get("gender"))
+            name=name,
+            label=label,
+            url=url,
+            gender=normalize_gender(value.get("gender")),
+            engine=infer_engine(url, value.get("engine")),
         )
     return None
 

@@ -9,6 +9,7 @@ export type Voice = {
   gender?: string | null;
   type?: string | null;
   rvc_version?: string | number | null;
+  engine?: string | null;
   tags?: string[] | null;
   description?: string | null;
   author?: string | null;

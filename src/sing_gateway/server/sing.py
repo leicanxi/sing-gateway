@@ -34,7 +34,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import FileResponse, JSONResponse, RedirectResponse
 
 from sing_gateway import (
     DEFAULT_REPLICATE_BASE,
@@ -47,9 +47,18 @@ from sing_gateway import (
     resolve_voice,
     search_songs,
 )
+from sing_gateway.cache import default_cache_root
 from sing_gateway.catalog import search_catalog
-from sing_gateway.config import AUTO_PITCH_MODE, VOLUME_MAX, VOLUME_MIN
+from sing_gateway.config import (
+    AUTO_PITCH_MODE,
+    DEFAULT_SVC_MODEL,
+    RVC_ENGINE,
+    SVC_ENGINE,
+    VOLUME_MAX,
+    VOLUME_MIN,
+)
 from sing_gateway.jobs import JobManager
+from sing_gateway.media import prepare_reference
 from sing_gateway.server.sso import (
     DEFAULT_NEXT,
     check_origin,
@@ -92,7 +101,7 @@ from sing_gateway.submissions import (
     set_visibility,
     usage_map,
 )
-from sing_gateway.voices import remove_voice
+from sing_gateway.voices import infer_engine, remove_voice
 
 app = FastAPI(title="sing-gateway", version="0.1.0")
 
@@ -103,7 +112,7 @@ _VOICES_MODEL = "sing-voices"
 _SEARCH_MODEL = "sing-search"
 _VOICES_NOTE = (
     "音色列表已迁移到音色广场：打开 plaza_url 挑选音色，点歌时把音色名传给 voice。"
-    "自有 RVC 音色可在广场页提交上传（自动审核），通过后会显示音色名。"
+    "自有 RVC 音色或参考音频可在广场页提交（自动审核），通过后会显示音色名。"
 )
 
 
@@ -197,8 +206,8 @@ def _request_payload(body: ChatCompletionRequest) -> dict[str, Any]:
     return {"song": content}
 
 
-def _voice_selection(payload: dict[str, Any]) -> tuple[str, str, str]:
-    """Return ``(model_url, label, gender)`` for the requested voice."""
+def _voice_selection(payload: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Return ``(voice_url, label, gender, engine)`` for the requested voice."""
     requested = str(payload.get("voice") or "").strip()
     if requested:
         spec = resolve_voice(requested)
@@ -212,14 +221,14 @@ def _voice_selection(payload: dict[str, Any]) -> tuple[str, str, str]:
                     f"{plaza_url()}, then pass its name as voice"
                 ),
             )
-        return spec.url, spec.label, spec.gender
+        return spec.url, spec.label, spec.gender, spec.engine
     configured = os.environ.get("SING_VOICE_URL", "").strip()
     if configured:
-        return configured, "", ""
+        return configured, "", "", infer_engine(configured)
     spec = resolve_voice("")
     if spec is None:
         raise HTTPException(status_code=503, detail="no voice model is configured")
-    return spec.url, spec.label, spec.gender
+    return spec.url, spec.label, spec.gender, spec.engine
 
 
 def _resolved_voice_name(payload: dict[str, Any]) -> str:
@@ -235,7 +244,7 @@ def _resolved_voice_name(payload: dict[str, Any]) -> str:
 
 
 def _config(payload: dict[str, Any]) -> SingConfig:
-    voice_url, voice_label, voice_gender = _voice_selection(payload)
+    voice_url, voice_label, voice_gender, voice_engine = _voice_selection(payload)
     default_pitch = _as_int(os.environ.get("SING_PITCH"), 2, minimum=-24, maximum=24)
     raw_mode = str(payload.get("pitch_mode") or "").strip().lower()
     raw_pitch = payload.get("pitch")
@@ -246,6 +255,13 @@ def _config(payload: dict[str, Any]) -> SingConfig:
         voice_model_url=voice_url,
         voice_label=voice_label,
         voice_gender=voice_gender,
+        voice_engine=voice_engine,
+        svc_model=os.environ.get("SING_SVC_MODEL", DEFAULT_SVC_MODEL),
+        svc_model_version=os.environ.get("SING_SVC_VERSION", ""),
+        svc_n_steps=_as_int(os.environ.get("SING_SVC_N_STEPS"), 32, minimum=8, maximum=64),
+        svc_cfg=_as_float(os.environ.get("SING_SVC_CFG"), 3.0, minimum=1.0, maximum=8.0),
+        svc_seed=_as_int(os.environ.get("SING_SVC_SEED"), 42, minimum=0, maximum=0xFFFFFFFF),
+        svc_random_seed=_as_bool(os.environ.get("SING_SVC_RANDOM_SEED")),
         model=os.environ.get("SING_REPLICATE_MODEL", "zsxkib/realistic-voice-cloning"),
         model_version=os.environ.get("SING_REPLICATE_VERSION", ""),
         replicate_base_url=os.environ.get("SING_REPLICATE_BASE_URL", DEFAULT_REPLICATE_BASE),
@@ -304,15 +320,18 @@ def _config(payload: dict[str, Any]) -> SingConfig:
 
 
 def _render(payload: dict[str, Any]) -> dict[str, Any]:
+    # Set by the handlers from the incoming request; not part of the public
+    # payload schema and ignored by ``_config`` and the job dedupe key.
+    audio_base = str(payload.get("_audio_base") or "")
     config = _config(payload)
     voice_name = _resolved_voice_name(payload)
     url = str(payload.get("url") or "").strip()
     song = str(payload.get("song") or "").strip()
     artist = str(payload.get("artist") or "").strip()
     if url:
-        result = render_song(url, config, artist=artist)
+        result = render_song(url, config, artist=artist, audio_base=audio_base)
     elif song:
-        result = render_song_by_query(song, config)
+        result = render_song_by_query(song, config, audio_base=audio_base)
     else:
         raise HTTPException(status_code=400, detail="url or song is required")
     if voice_name:
@@ -407,7 +426,7 @@ def _candidates_block(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/v1/chat/completions", dependencies=[Depends(_require_token)])
-async def chat_completions(body: ChatCompletionRequest) -> dict[str, Any]:
+async def chat_completions(body: ChatCompletionRequest, request: Request) -> dict[str, Any]:
     model = (body.model or _DEFAULT_MODEL).strip()
     if model == _VOICES_MODEL:
         block: dict[str, Any] = _voices_block()
@@ -422,6 +441,7 @@ async def chat_completions(body: ChatCompletionRequest) -> dict[str, Any]:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
     else:
         payload = _request_payload(body)
+        payload["_audio_base"] = _audio_base(request)
         try:
             block = await asyncio.to_thread(_render, payload)
         except HTTPException:
@@ -453,10 +473,11 @@ async def chat_completions(body: ChatCompletionRequest) -> dict[str, Any]:
 
 @app.post("/v1/sing/jobs", status_code=202, dependencies=[Depends(_require_token)])
 @app.post("/sing/v1/jobs", status_code=202, dependencies=[Depends(_require_token)])
-async def submit_sing_job(body: JobRequest) -> dict[str, Any]:
+async def submit_sing_job(body: JobRequest, request: Request) -> dict[str, Any]:
     payload = _job_payload(body)
     if not payload.get("url") and not payload.get("song"):
         raise HTTPException(status_code=400, detail="url or song is required")
+    payload["_audio_base"] = _audio_base(request)
     try:
         # Validate the voice and static config now; the long work runs in a job.
         _config(payload)
@@ -476,8 +497,28 @@ async def get_sing_job(job_id: str) -> dict[str, Any]:
     return _JOBS.view(job)
 
 
+@app.api_route("/v1/sing/audio/{key}.mp3", methods=["GET", "HEAD"])
+@app.api_route("/sing/v1/audio/{key}.mp3", methods=["GET", "HEAD"])
+def cached_audio(key: str) -> FileResponse:
+    """Serve one cached cover from the gateway's own disk cache.
+
+    Deliberately token-free: AstrBot and QQ fetch this URL directly. The key
+    is a 128-bit hash of the render parameters, so entries cannot be
+    enumerated, and serving the local mp3 keeps the URL valid until the cache
+    entry itself is evicted — unlike Replicate delivery URLs, which expire
+    after an hour.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", key):
+        raise HTTPException(status_code=404, detail="audio not found")
+    path = default_cache_root() / f"{key}.mp3"
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise HTTPException(status_code=404, detail="audio not found")
+    return FileResponse(path, media_type="audio/mpeg")
+
+
 UPLOAD_DIR_ENV = "SING_UPLOAD_DIR"
 PUBLIC_BASE_ENV = "SING_PUBLIC_BASE_URL"
+AUDIO_BASE_ENV = "SING_AUDIO_BASE_URL"
 HF_REPO_ENV = "SING_HF_REPO"
 HF_TOKEN_ENV = "SING_HF_TOKEN"
 HF_PREFIX_ENV = "SING_HF_PREFIX"
@@ -496,6 +537,22 @@ def _upload_dir() -> Path | None:
 def _public_base() -> str | None:
     raw = os.environ.get(PUBLIC_BASE_ENV, "").strip()
     return raw.rstrip("/") if raw else None
+
+
+def _audio_base(request: Request | None = None) -> str:
+    """Public origin that serves ``/v1/sing/audio/...``.
+
+    Explicit config wins because the gateway usually sits behind new-api:
+    the upstream request's host is the docker bridge, not the client's
+    origin. Self-hosted installs need no config — the plugin already talks
+    to this host, so its request base URL is the reachable one.
+    """
+    raw = os.environ.get(AUDIO_BASE_ENV, "").strip() or os.environ.get(PUBLIC_BASE_ENV, "").strip()
+    if raw:
+        return raw.rstrip("/")
+    if request is not None:
+        return str(request.base_url).rstrip("/")
+    return plaza_base()
 
 
 def _hf_repo() -> str | None:
@@ -542,6 +599,11 @@ def _max_upload_mb() -> int:
 _LANGUAGE_VALUES = frozenset({"zh", "ja", "en", "ko", "other", "unknown"})
 _GENDER_VALUES = frozenset({"female", "male", "neutral", "unknown"})
 _RVC_VALUES = frozenset({"v1", "v2", "unknown"})
+_ENGINE_VALUES = frozenset({RVC_ENGINE, SVC_ENGINE})
+_REFERENCE_MAX_SECONDS = 30
+_REFERENCE_MIN_SECONDS = 5.0
+# A 30s 192kbps clip is well under 1MB; 12MB leaves room for lossless uploads.
+_REFERENCE_MAX_BYTES = 12 * 1024 * 1024
 _TAG_SPLIT_RE = re.compile(r"[,，、\s]+")
 
 
@@ -737,7 +799,107 @@ def _review_submission(
         "reason": f"{review.reason}；{llm_reason}",
         "name": name,
         "url": url,
+        "source": source_kind,
     }
+
+
+def _reference_error(reason: str) -> dict[str, Any]:
+    return {"approved": False, "reason": reason, "name": "", "url": ""}
+
+
+def _review_reference(
+    path: Path,
+    *,
+    label: str,
+    flowbee_user: str,
+    source_url: str,
+    upload_dir: Path | None,
+    public_base: str | None,
+) -> dict[str, Any]:
+    """Validate a 5–30s clip and publish it as a zero-shot voice.
+
+    No model file is produced: the normalised mp3 is the voice. Storage is
+    preferred over echoing the user's link because the Cog fetches this URL on
+    every render, and a direct link can expire or require auth.
+    """
+    workdir = Path(tempfile.mkdtemp(prefix="sing-ref-"))
+    try:
+        try:
+            mp3, duration = prepare_reference(
+                path, workdir, max_seconds=_REFERENCE_MAX_SECONDS
+            )
+        except Exception:  # noqa: BLE001 - ffmpeg rejects anything undecodable
+            logger.info("reference upload is not decodable: %s", path, exc_info=True)
+            return _reference_error("不是有效的音频文件（支持 mp3 / wav / flac / m4a / ogg / aac）")
+        if duration < _REFERENCE_MIN_SECONDS:
+            return _reference_error(
+                f"参考音频太短（{duration:.1f} 秒），请上传 5–30 秒的连续清唱"
+            )
+        name = generate_name(label, set(load_voices().keys()))
+        hf_repo, hf_token = _hf_repo(), _hf_token()
+        ms_repo, ms_token = _ms_repo(), _ms_token()
+        if hf_repo and hf_token:
+            try:
+                url = hf_upload(
+                    mp3,
+                    repo_id=hf_repo,
+                    path_in_repo=f"{_hf_prefix()}/{name}.mp3",
+                    token=hf_token,
+                )
+            except Exception as exc:  # noqa: BLE001 - operator-actionable
+                logger.warning("huggingface upload failed: %s", exc)
+                raise HTTPException(
+                    status_code=502,
+                    detail="上传到 Hugging Face 失败，请稍后重试",
+                ) from exc
+            source_kind = "hf"
+        elif ms_repo and ms_token:
+            try:
+                url = modelscope_upload(
+                    mp3,
+                    repo_id=ms_repo,
+                    path_in_repo=f"{_ms_prefix()}/{name}.mp3",
+                    token=ms_token,
+                )
+            except Exception as exc:  # noqa: BLE001 - operator-actionable
+                logger.warning("modelscope upload failed: %s", exc)
+                raise HTTPException(
+                    status_code=502,
+                    detail="上传到 ModelScope 失败，请稍后重试",
+                ) from exc
+            source_kind = "ms"
+        elif upload_dir is not None and public_base is not None:
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            dest = upload_dir / f"{name}.mp3"
+            shutil.copyfile(mp3, dest)
+            url = f"{public_base}/uploads/{dest.name}"
+            source_kind = "upload"
+        elif source_url:
+            url = source_url
+            source_kind = "link"
+        else:
+            raise HTTPException(status_code=503, detail="服务器未开启文件上传")
+        add_voice(
+            name,
+            label,
+            url,
+            extra={
+                "engine": SVC_ENGINE,
+                "added_by": flowbee_user,
+                "source": source_kind,
+                "added_at": int(time.time()),
+                "duration_seconds": round(duration, 1),
+            },
+        )
+        return {
+            "approved": True,
+            "reason": f"参考音频 {duration:.1f} 秒，格式检查通过",
+            "name": name,
+            "url": url,
+            "source": source_kind,
+        }
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 @app.post("/v1/voice-requests")
@@ -754,6 +916,8 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
     language = ""
     gender = ""
     rvc_version = ""
+    engine = ""
+    consent = ""
     description = ""
     upload: UploadFile | None = None
     if content_type.startswith("multipart/form-data"):
@@ -764,6 +928,8 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
         language = str(form.get("language") or "")
         gender = str(form.get("gender") or "")
         rvc_version = str(form.get("rvc_version") or "")
+        engine = str(form.get("engine") or "")
+        consent = str(form.get("consent") or "")
         description = str(form.get("description") or "")
         candidate = form.get("file")
         if isinstance(candidate, UploadFile) and candidate.filename:
@@ -783,18 +949,33 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
         language = str(body.get("language") or "")
         gender = str(body.get("gender") or "")
         rvc_version = str(body.get("rvc_version") or "")
+        engine = str(body.get("engine") or "")
+        consent = str(body.get("consent") or "")
         description = str(body.get("description") or "")
     label = " ".join(label.split())[:80]
     tags = _parse_tags(tags_value)
     language = _choice(language, _LANGUAGE_VALUES)
     gender = _choice(gender, _GENDER_VALUES)
     rvc_version = _choice(rvc_version, _RVC_VALUES)
+    engine = _choice(engine, _ENGINE_VALUES) or RVC_ENGINE
+    if engine == SVC_ENGINE:
+        # RVC version is meaningless for a reference clip; drop a stray value.
+        rvc_version = ""
+        # A reference clip is a real person's voice: require an explicit
+        # statement before accepting it, even though it cannot be verified.
+        if str(consent).strip().lower() not in {"1", "true", "yes", "on"}:
+            raise HTTPException(
+                status_code=400,
+                detail="请确认你拥有这段录音的使用权，且不会用于冒充他人",
+            )
     description = " ".join(description.split())[:500]
     if not label:
         raise HTTPException(status_code=400, detail="请填写音色显示名")
     if upload is None and not source_url:
-        raise HTTPException(status_code=400, detail="请上传 zip 文件或提供模型直链")
+        raise HTTPException(status_code=400, detail="请上传文件或提供直链")
     max_bytes = _max_upload_mb() * 1024 * 1024
+    if engine == SVC_ENGINE:
+        max_bytes = min(max_bytes, _REFERENCE_MAX_BYTES)
     upload_dir = _upload_dir()
     public_base = _public_base()
     if upload is not None and not _storage_ready():
@@ -802,7 +983,9 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
             status_code=503,
             detail="服务器未配置模型存储，请改用模型直链（huggingface / modelscope 等）",
         )
-    descriptor, temp_name = tempfile.mkstemp(prefix="sing-voice-", suffix=".zip")
+    descriptor, temp_name = tempfile.mkstemp(
+        prefix="sing-voice-", suffix=".audio" if engine == SVC_ENGINE else ".zip"
+    )
     os.close(descriptor)
     temp = Path(temp_name)
     try:
@@ -810,8 +993,9 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
             await _save_upload(upload, temp, max_bytes)
         else:
             await asyncio.to_thread(_download_zip, source_url, temp, max_bytes)
+        reviewer = _review_reference if engine == SVC_ENGINE else _review_submission
         result = await asyncio.to_thread(
-            _review_submission,
+            reviewer,
             temp,
             label=label,
             flowbee_user=identity.username,
@@ -822,13 +1006,14 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
     finally:
         temp.unlink(missing_ok=True)
     request_id = new_request_id()
+    source_kind = str(result.get("source") or ("link" if source_url else "upload"))
     record = build_request_record(
         request_id=request_id,
         name=str(result["name"]),
         label=label,
         url=str(result["url"]),
         flowbee_user=identity.username,
-        source="link" if source_url else "upload",
+        source=source_kind,
         approved=bool(result["approved"]),
         reason=str(result["reason"]),
         flowbee_uid=identity.uid,
@@ -836,6 +1021,7 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
         language=language,
         gender=gender,
         rvc_version=rvc_version,
+        engine=engine,
         description=description,
     )
     await asyncio.to_thread(save_request, record)
@@ -858,6 +1044,7 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
         "language": language,
         "gender": gender,
         "rvc_version": rvc_version,
+        "engine": engine,
         "description": description,
         "visibility": record["visibility"],
         "status_path": f"/v1/voice-requests/{request_id}",
@@ -867,23 +1054,25 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
 def _delete_storage(record: dict[str, Any]) -> None:
     name = str(record.get("name") or "")
     source = str(record.get("source") or "")
+    # Reference voices are stored as normalised mp3; RVC submissions as zips.
+    suffix = ".mp3" if str(record.get("engine") or "") == SVC_ENGINE else ".zip"
     try:
         if source == "ms" and _ms_repo() and _ms_token():
             modelscope_delete(
                 repo_id=_ms_repo() or "",
                 token=_ms_token(),
-                path_in_repo=f"{_ms_prefix()}/{name}.zip",
+                path_in_repo=f"{_ms_prefix()}/{name}{suffix}",
             )
         elif source == "hf" and _hf_repo() and _hf_token():
             hf_delete(
                 repo_id=_hf_repo() or "",
                 token=_hf_token(),
-                path_in_repo=f"{_hf_prefix()}/{name}.zip",
+                path_in_repo=f"{_hf_prefix()}/{name}{suffix}",
             )
         elif source == "upload":
             upload_dir = _upload_dir()
             if upload_dir is not None:
-                (upload_dir / f"{name}.zip").unlink(missing_ok=True)
+                (upload_dir / f"{name}{suffix}").unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001 - best effort, record still gets deleted
         logger.warning("voice storage delete failed for %s: %s", name, exc)
 

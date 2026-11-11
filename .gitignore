@@ -9,3 +9,5 @@ build/
 .mypy_cache/
 .ruff_cache/
 *.tmp
+# Cog regenerates its build context (Dockerfile, schema) on every build.
+.cog/

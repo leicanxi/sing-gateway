@@ -295,6 +295,7 @@ def reconcile_whitelist(path: Path | None = None) -> None:
                 raw[name] = {
                     "label": record.get("label") or name,
                     "url": url,
+                    "engine": record.get("engine") or "rvc",
                     "added_by": record.get("flowbee_user") or "",
                     "source": record.get("source") or "",
                     "added_at": int(record.get("created_at") or time.time()),
@@ -528,6 +529,7 @@ def build_request_record(
     language: str = "",
     gender: str = "",
     rvc_version: str = "",
+    engine: str = "rvc",
     description: str = "",
     author_display: str = "",
 ) -> dict[str, Any]:
@@ -548,6 +550,7 @@ def build_request_record(
         "language": language,
         "gender": gender,
         "rvc_version": rvc_version,
+        "engine": engine,
         "tags": list(tags or []),
         "description": description,
         "created_at": now,

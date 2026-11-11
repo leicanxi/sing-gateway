@@ -70,7 +70,11 @@ class JobManager:
         existing_id = self._by_key.get(key)
         if existing_id:
             existing = self._jobs.get(existing_id)
-            if existing is not None and existing.status in {"queued", "running", "succeeded"}:
+            # Only merge requests that are still in flight (double-clicks,
+            # retries while the first render runs). A finished job's audio URL
+            # may already be stale, so repeat requests go through the render
+            # path again and hit the gateway's own disk cache instead.
+            if existing is not None and existing.status in {"queued", "running"}:
                 return existing
         job = Job(id=f"job_{uuid.uuid4().hex}", payload=dict(payload), dedupe_key=key)
         self._jobs[job.id] = job
@@ -115,6 +119,8 @@ class JobManager:
                 data["source_match"] = str(job.result.get("source_match"))
             if job.result.get("original_artist"):
                 data["original_artist"] = str(job.result.get("original_artist"))
+            if job.result.get("engine"):
+                data["engine"] = str(job.result.get("engine"))
         return data
 
     async def _run(self, job: Job) -> None:

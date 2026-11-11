@@ -921,7 +921,7 @@ def test_render_increments_voice_usage(monkeypatch: MonkeyPatch, tmp_path) -> No
     monkeypatch.setattr(
         sing,
         "render_song",
-        lambda url, cfg, artist="": SingResult("https://cdn/a.mp3", "a.mp3"),
+        lambda url, cfg, artist="", audio_base="": SingResult("https://cdn/a.mp3", "a.mp3"),
     )
     block = sing._render({"voice": "cirno", "url": "https://example.com/song.mp3"})
     assert block["type"] == "audio"
@@ -940,3 +940,125 @@ def test_events_record_publish_unpublish_delete(monkeypatch: MonkeyPatch, tmp_pa
 
     actions = [item["action"] for item in subs.list_events("vr-mine-1a2b")]
     assert actions == ["approved", "published", "unpublished", "deleted"]
+
+
+def _wav_bytes(seconds: float = 6.0, sample_rate: int = 8000) -> bytes:
+    import io
+    import math
+    import struct
+    import wave
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(
+            b"".join(
+                struct.pack("<h", int(8000 * math.sin(2 * math.pi * 220 * i / sample_rate)))
+                for i in range(int(sample_rate * seconds))
+            )
+        )
+    return buffer.getvalue()
+
+
+def test_submit_reference_audio_registers_svc_voice(
+    monkeypatch: MonkeyPatch, tmp_path
+) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    response = _client().post(
+        "/v1/voice-requests",
+        data={"label": "My Ref", "engine": "svc_ref", "consent": "1", "gender": "female"},
+        files={"file": ("ref.wav", _wav_bytes(), "audio/wav")},
+        cookies=_session(),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "approved", body
+    assert body["engine"] == "svc_ref"
+    assert body["name"].startswith("my-ref-")
+
+    voices = json.loads((tmp_path / "voices.json").read_text(encoding="utf-8"))
+    entry = voices[body["name"]]
+    assert entry["engine"] == "svc_ref"
+    assert entry["url"].endswith(".mp3")
+    assert (tmp_path / "uploads" / f"{body['name']}.mp3").exists()
+
+    status = _client().get(body["status_path"])
+    assert status.status_code == 200
+    assert status.json()["engine"] == "svc_ref"
+
+    config = sing._config({"voice": body["name"]})
+    assert config.voice_engine == "svc_ref"
+    assert config.voice_model_url.endswith(".mp3")
+
+
+def test_submit_reference_too_short_is_rejected(
+    monkeypatch: MonkeyPatch, tmp_path
+) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    response = _client().post(
+        "/v1/voice-requests",
+        data={"label": "Too Short", "engine": "svc_ref", "consent": "1"},
+        files={"file": ("ref.wav", _wav_bytes(2.0), "audio/wav")},
+        cookies=_session("bob", 8),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "rejected"
+    assert "太短" in body["reason"]
+    assert not (tmp_path / "voices.json").exists()
+
+
+def test_submit_reference_garbage_is_rejected(
+    monkeypatch: MonkeyPatch, tmp_path
+) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    response = _client().post(
+        "/v1/voice-requests",
+        data={"label": "Not Audio", "engine": "svc_ref", "consent": "1"},
+        files={"file": ("ref.mp3", b"definitely not audio", "audio/mpeg")},
+        cookies=_session("carol", 9),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "rejected"
+    assert "有效的音频" in body["reason"]
+
+
+def test_submit_reference_requires_consent(
+    monkeypatch: MonkeyPatch, tmp_path
+) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    response = _client().post(
+        "/v1/voice-requests",
+        data={"label": "No Consent", "engine": "svc_ref"},
+        files={"file": ("ref.wav", _wav_bytes(), "audio/wav")},
+        cookies=_session("dave", 10),
+    )
+    assert response.status_code == 400
+    assert "使用权" in response.json()["detail"]
+
+
+def test_public_reference_voice_exposes_engine_and_preview(
+    monkeypatch: MonkeyPatch, tmp_path
+) -> None:
+    _submission_env(monkeypatch, tmp_path)
+    response = _client().post(
+        "/v1/voice-requests",
+        data={"label": "Public Ref", "engine": "svc_ref", "consent": "1"},
+        files={"file": ("ref.wav", _wav_bytes(), "audio/wav")},
+        cookies=_session("erin", 11),
+    )
+    body = response.json()
+    assert body["status"] == "approved", body
+
+    publish = _client().post(
+        f"/v1/voice-requests/{body['id']}/publish", cookies=_session("erin", 11)
+    )
+    assert publish.status_code == 200
+
+    listing = _client().get("/v1/voices/public").json()["voices"]
+    item = next(voice for voice in listing if voice["name"] == body["name"])
+    assert item["engine"] == "svc_ref"
+    assert item["preview_url"].endswith(".mp3")

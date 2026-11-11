@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import wave
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -58,7 +59,7 @@ def trim_audio(source: Path, target: Path, start: int, duration: int) -> None:
     )
 
 
-def to_mp3(source: Path, target: Path) -> None:
+def to_mp3(source: Path, target: Path, *, bitrate: str = "320k") -> None:
     subprocess.run(
         [
             _ffmpeg_exe(),
@@ -70,13 +71,51 @@ def to_mp3(source: Path, target: Path) -> None:
             "-c:a",
             "libmp3lame",
             "-b:a",
-            "320k",
+            bitrate,
             str(target),
         ],
         check=True,
         capture_output=True,
         timeout=180,
     )
+
+
+def prepare_reference(source: Path, workdir: Path, *, max_seconds: int = 30) -> tuple[Path, float]:
+    """Normalise a submitted reference clip to mono 44.1k mp3.
+
+    Returns the mp3 and its decoded duration. ffmpeg also validates the
+    container: a non-audio upload raises ``CalledProcessError`` and the caller
+    rejects the submission instead of storing an unusable voice.
+    """
+    wav = workdir / "reference.wav"
+    subprocess.run(
+        [
+            _ffmpeg_exe(),
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(source),
+            "-t",
+            str(max_seconds),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "44100",
+            "-c:a",
+            "pcm_s16le",
+            str(wav),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=180,
+    )
+    with wave.open(str(wav), "rb") as handle:
+        duration = handle.getnframes() / float(handle.getframerate() or 1)
+    mp3 = workdir / "reference.mp3"
+    to_mp3(wav, mp3, bitrate="192k")
+    return mp3, duration
 
 
 def sniff_audio_suffix(content: bytes, content_type: str, url: str) -> str:
