@@ -27,6 +27,15 @@ from sing_gateway.config import (
 
 logger = logging.getLogger(__name__)
 
+# Replicate's edge returns 503 bursts and drops connections while a prediction
+# is still healthy; failing the job on the first one throws away a render the
+# GPU has already been paid for. Retry transient responses within the overall
+# prediction timeout instead.
+_RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+_RETRY_ATTEMPTS = 10
+_RETRY_BASE_SECONDS = 2.0
+_RETRY_MAX_SECONDS = 60.0
+
 _VOICE_DOWNLOAD_MARKER = "downloading voice model"
 _HTTP_STATUS_RE = re.compile(r"HTTP(?: Error)? (\d{3})")
 _REFERENCE_DOWNLOAD_RE = re.compile(r"REFERENCE_DOWNLOAD_FAILED (\d{3})")
@@ -72,24 +81,116 @@ def _clamp_float(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, float(value)))
 
 
+def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
+    if response is not None:
+        raw = response.headers.get("retry-after")
+        if raw:
+            try:
+                return min(max(float(raw), 0.0) + 1.0, 120.0)
+            except ValueError:
+                pass
+    return float(min(_RETRY_BASE_SECONDS * (2**attempt), _RETRY_MAX_SECONDS))
+
+
+def _request(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    *,
+    idempotent: bool = True,
+    attempts: int = _RETRY_ATTEMPTS,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Send one request, retrying Replicate's transient failures.
+
+    ``idempotent`` is False for ``POST /predictions``: retrying a read timeout
+    there could create a second prediction and bill the render twice, so only
+    connection-level failures are retried.
+    """
+    send = client.get if method.upper() == "GET" else client.post
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            response = send(url, **kwargs)
+        except httpx.TransportError as exc:
+            if not idempotent and not isinstance(
+                exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+            ):
+                raise
+            last = exc
+            delay = _retry_delay(None, attempt)
+            logger.warning(
+                "replicate %s %s transport error %r; retrying in %.0fs (%d/%d)",
+                method,
+                url,
+                exc,
+                delay,
+                attempt + 1,
+                attempts,
+            )
+            time.sleep(delay)
+            continue
+        if response.status_code in _RETRY_STATUSES:
+            last = RuntimeError(f"HTTP {response.status_code}")
+            delay = _retry_delay(response, attempt)
+            logger.warning(
+                "replicate %s %s -> HTTP %d; retrying in %.0fs (%d/%d)",
+                method,
+                url,
+                response.status_code,
+                delay,
+                attempt + 1,
+                attempts,
+            )
+            time.sleep(delay)
+            continue
+        return response
+    raise RuntimeError(f"replicate {method} {url} failed after {attempts} attempts: {last}") from last
+
+
 def upload_file(base_url: str, token: str, path: Path) -> str:
-    with httpx.Client(timeout=180.0) as client, path.open("rb") as handle:
-        response = client.post(
-            f"{base_url}/files",
-            headers={"Authorization": f"Bearer {token}"},
-            files={
-                "content": (
-                    path.name,
-                    handle,
-                    "audio/wav" if path.suffix.lower() == ".wav" else "audio/mpeg",
+    content_type = "audio/wav" if path.suffix.lower() == ".wav" else "audio/mpeg"
+    last: Exception | None = None
+    with httpx.Client(timeout=180.0) as client:
+        for attempt in range(_RETRY_ATTEMPTS):
+            # A failed attempt consumes the handle, so reopen it for the retry.
+            with path.open("rb") as handle:
+                try:
+                    response = client.post(
+                        f"{base_url}/files",
+                        headers={"Authorization": f"Bearer {token}"},
+                        files={"content": (path.name, handle, content_type)},
+                    )
+                except httpx.TransportError as exc:
+                    last = exc
+                    delay = _retry_delay(None, attempt)
+                    logger.warning(
+                        "replicate file upload transport error %r; retrying in %.0fs (%d/%d)",
+                        exc,
+                        delay,
+                        attempt + 1,
+                        _RETRY_ATTEMPTS,
+                    )
+                    time.sleep(delay)
+                    continue
+            if response.status_code in _RETRY_STATUSES:
+                last = RuntimeError(f"HTTP {response.status_code}")
+                delay = _retry_delay(response, attempt)
+                logger.warning(
+                    "replicate file upload -> HTTP %d; retrying in %.0fs (%d/%d)",
+                    response.status_code,
+                    delay,
+                    attempt + 1,
+                    _RETRY_ATTEMPTS,
                 )
-            },
-        )
-    response.raise_for_status()
-    url = (response.json().get("urls") or {}).get("get")
-    if not url:
-        raise RuntimeError("replicate file upload returned no url")
-    return str(url)
+                time.sleep(delay)
+                continue
+            response.raise_for_status()
+            url = (response.json().get("urls") or {}).get("get")
+            if not url:
+                raise RuntimeError("replicate file upload returned no url")
+            return str(url)
+    raise RuntimeError(f"replicate file upload failed after {_RETRY_ATTEMPTS} attempts: {last}") from last
 
 
 def _create_prediction(
@@ -98,22 +199,22 @@ def _create_prediction(
     payload: dict[str, Any],
     headers: dict[str, str],
 ) -> str:
-    for _ in range(8):
-        response = client.post(f"{base_url}/predictions", json=payload, headers=headers)
-        if response.status_code == 429:
-            wait = int(response.headers.get("retry_after") or 10)
-            logger.info("replicate throttled, waiting %ss", wait)
-            time.sleep(wait + 2)
-            continue
-        response.raise_for_status()
-        return str(response.json()["id"])
-    raise RuntimeError("replicate prediction stayed rate-limited")
+    response = _request(
+        client,
+        "POST",
+        f"{base_url}/predictions",
+        idempotent=False,
+        json=payload,
+        headers=headers,
+    )
+    response.raise_for_status()
+    return str(response.json()["id"])
 
 
 def _model_version(client: httpx.Client, base_url: str, model: str, version: str) -> str:
     if version:
         return version
-    response = client.get(f"{base_url}/models/{model}")
+    response = _request(client, "GET", f"{base_url}/models/{model}")
     response.raise_for_status()
     return str(response.json()["latest_version"]["id"])
 
@@ -135,7 +236,7 @@ def _run_prediction(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         time.sleep(2)
-        response = client.get(f"{base_url}/predictions/{prediction_id}")
+        response = _request(client, "GET", f"{base_url}/predictions/{prediction_id}")
         response.raise_for_status()
         job = response.json()
         status = str(job.get("status") or "")

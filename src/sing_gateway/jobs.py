@@ -10,12 +10,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 JOB_TTL_SECONDS = float(os.environ.get("SING_JOB_TTL_SECONDS", "3600"))
 MAX_CONCURRENCY = max(1, int(os.environ.get("SING_MAX_CONCURRENCY", "2")))
@@ -134,6 +137,12 @@ class JobManager:
             job.status = "failed"
             job.stage = "failed"
             job.error = str(exc).strip() or type(exc).__name__
+            logger.warning(
+                "job %s failed for %r: %s",
+                job.id,
+                job.payload.get("song") or job.payload.get("url") or "",
+                job.error,
+            )
         else:
             job.status = "succeeded"
             job.stage = "done"

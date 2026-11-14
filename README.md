@@ -22,6 +22,13 @@ Only the Replicate prediction costs money; search/download and ffmpeg run
 locally. AICoverGen already bundles vocal separation, RVC and mixing, so one
 prediction is the whole paid step.
 
+Replicate occasionally returns 503s or drops connections from its edge while a
+prediction keeps running. The client retries 408/429/5xx and network errors with
+exponential backoff (honouring `Retry-After`) instead of failing the job; the
+prediction-creation request only retries connection-level failures so a read
+timeout cannot bill a second render. Failed jobs are logged with their id and
+song, and new-api refunds the reserved quota.
+
 ## Install
 
 ```bash
