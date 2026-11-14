@@ -593,7 +593,17 @@ def _storage_ready() -> bool:
 
 
 def _max_upload_mb() -> int:
-    return _as_int(os.environ.get("SING_UPLOAD_MAX_MB"), 300, minimum=1, maximum=2048)
+    # Trained RVC checkpoints ship logs and multiple .pth/.index files, so the
+    # default leaves far more room than a bare weight file needs.
+    return _as_int(os.environ.get("SING_UPLOAD_MAX_MB"), 1024, minimum=1, maximum=4096)
+
+
+def _reference_max_bytes() -> int:
+    # Clips are trimmed to 30s server-side, so the byte cap only decides how
+    # much the browser must push before the trim. The default fits long
+    # lossless exports; operators cannot exceed the general upload cap.
+    mb = _as_int(os.environ.get("SING_REFERENCE_MAX_MB"), 256, minimum=1, maximum=4096)
+    return min(mb, _max_upload_mb()) * 1024 * 1024
 
 
 _LANGUAGE_VALUES = frozenset({"zh", "ja", "en", "ko", "other", "unknown"})
@@ -602,8 +612,6 @@ _RVC_VALUES = frozenset({"v1", "v2", "unknown"})
 _ENGINE_VALUES = frozenset({RVC_ENGINE, SVC_ENGINE})
 _REFERENCE_MAX_SECONDS = 30
 _REFERENCE_MIN_SECONDS = 5.0
-# A 30s 192kbps clip is well under 1MB; 12MB leaves room for lossless uploads.
-_REFERENCE_MAX_BYTES = 12 * 1024 * 1024
 _TAG_SPLIT_RE = re.compile(r"[,，、\s]+")
 
 
@@ -975,7 +983,7 @@ async def submit_voice_request(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="请上传文件或提供直链")
     max_bytes = _max_upload_mb() * 1024 * 1024
     if engine == SVC_ENGINE:
-        max_bytes = min(max_bytes, _REFERENCE_MAX_BYTES)
+        max_bytes = min(max_bytes, _reference_max_bytes())
     upload_dir = _upload_dir()
     public_base = _public_base()
     if upload is not None and not _storage_ready():
@@ -1204,6 +1212,17 @@ def delete_voice_request(request: Request, request_id: str) -> dict[str, Any]:
         _delete_storage(record)
     mark_deleted(request_id, actor_uid=identity.uid, actor_role="user")
     return {"ok": True, "name": name}
+
+
+@app.get("/v1/voice-config")
+def voice_config() -> dict[str, Any]:
+    """Limits the plaza upload form mirrors, so UI and server never drift."""
+    return {
+        "max_upload_mb": _max_upload_mb(),
+        "reference_max_mb": _reference_max_bytes() // (1024 * 1024),
+        "reference_min_seconds": _REFERENCE_MIN_SECONDS,
+        "reference_max_seconds": _REFERENCE_MAX_SECONDS,
+    }
 
 
 @app.get("/v1/voices/public")

@@ -19,9 +19,14 @@ import {
 import type { Account } from '../lib/types';
 import { CheckIcon, CopyIcon, UploadIcon } from './icons';
 
-const MAX_BYTES = 300 * 1024 * 1024;
-const REFERENCE_MAX_BYTES = 12 * 1024 * 1024;
+// Fallbacks until /v1/voice-config answers; the server is the real limit.
+const DEFAULT_MAX_UPLOAD_MB = 1024;
+const DEFAULT_REFERENCE_MAX_MB = 256;
 const AUDIO_FILE_RE = /\.(wav|mp3|flac|m4a|ogg|aac)$/i;
+
+function formatSize(mb: number): string {
+  return mb >= 1024 && mb % 1024 === 0 ? `${mb / 1024}GB` : `${mb}MB`;
+}
 
 const LANGUAGES = [
   { value: 'none', label: '未指定' },
@@ -110,7 +115,29 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
   const [error, setError] = useState('');
   const [result, setResult] = useState<Submission | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [maxUploadMb, setMaxUploadMb] = useState(DEFAULT_MAX_UPLOAD_MB);
+  const [referenceMaxMb, setReferenceMaxMb] = useState(DEFAULT_REFERENCE_MAX_MB);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch('/v1/voice-config', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : null))
+      .then(
+        (payload: { max_upload_mb?: number; reference_max_mb?: number } | null) => {
+          if (cancelled) return;
+          const mb = Math.floor(Number(payload?.max_upload_mb));
+          const referenceMb = Math.floor(Number(payload?.reference_max_mb));
+          if (Number.isFinite(mb) && mb > 0) setMaxUploadMb(mb);
+          if (Number.isFinite(referenceMb) && referenceMb > 0) setReferenceMaxMb(referenceMb);
+        },
+      )
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open && result) {
@@ -195,8 +222,8 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
           setError('参考音频仅支持 wav / mp3 / flac / m4a / ogg / aac');
           return false;
         }
-        if (file.size > REFERENCE_MAX_BYTES) {
-          setError('参考音频超过 12MB 上限');
+        if (file.size > referenceMaxMb * 1024 * 1024) {
+          setError(`参考音频超过 ${formatSize(referenceMaxMb)} 上限`);
           return false;
         }
         if (clipSeconds !== null && clipSeconds < 5) {
@@ -208,8 +235,8 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
           setError('仅支持 .zip 文件');
           return false;
         }
-        if (file.size > MAX_BYTES) {
-          setError('文件超过 300MB 上限');
+        if (file.size > maxUploadMb * 1024 * 1024) {
+          setError(`文件超过 ${formatSize(maxUploadMb)} 上限`);
           return false;
         }
       }
@@ -557,7 +584,7 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
                         <FileUpload
                           accept=".wav,.mp3,.flac,.m4a,.ogg,.aac,audio/*"
                           browseLabel="选择音频"
-                          description="5–30 秒、单人、无伴奏、低混响；超过 30 秒只取前 30 秒。"
+                          description={`5–30 秒、单人、无伴奏、低混响；超过 30 秒只取前 30 秒，最大 ${formatSize(referenceMaxMb)}。`}
                           maxFiles={1}
                           onFilesAdded={(next, added) => {
                             setUploadItems(next);
@@ -577,7 +604,7 @@ export function UploadDrawer({ open, onOpenChange, account }: UploadDrawerProps)
                         <FileUpload
                           accept=".zip,application/zip"
                           browseLabel="选择文件"
-                          description="仅支持 .zip，最大 300MB；需包含 .pth 权重（.index 可选）。"
+                          description={`仅支持 .zip，最大 ${formatSize(maxUploadMb)}；需包含 .pth 权重（.index 可选）。`}
                           maxFiles={1}
                           onFilesAdded={(next, added) => {
                             setUploadItems(next);

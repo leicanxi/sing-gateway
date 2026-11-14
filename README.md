@@ -312,8 +312,10 @@ file=@reference.wav
 ```
 
 The server decodes the file with ffmpeg, caps it at 30 seconds, re-encodes it
-to mono 44.1k mp3, and rejects anything shorter than 5 seconds or undecodable
-(`SING_UPLOAD_MAX_MB` still applies, capped at 12MB for clips). `consent=1` is
+to mono 44.1k mp3, and rejects anything shorter than 5 seconds or undecodable.
+Uploads are capped by `SING_REFERENCE_MAX_MB` (default 256MB, itself clamped to
+`SING_UPLOAD_MAX_MB`) — the cap only limits how much the browser must push,
+since everything past 30 seconds is trimmed. `consent=1` is
 required for reference clips: the uploader confirms they have the right to use
 the recording. RVC zip submissions leave `engine` empty and behave exactly as
 before.
@@ -520,11 +522,15 @@ through the gateway instead:
 
 ```text
 GET /v1/voices/catalog?q=&lang=&gender=&type=&sort=hot|favorites|new|label&limit=60&offset=0
+GET /v1/voice-config
 ```
 
 - `sort=hot` orders by `voice_stats.uses`, then upstream favorites; `new` uses
   the source `weights_id`; the response includes `total`, `items` and
   `next_offset`.
+- `voice-config` is public and reports the limits the upload form mirrors
+  (`max_upload_mb` from `SING_UPLOAD_MAX_MB`, reference-clip bounds), so the
+  browser and the server validation cannot drift apart.
 - Each item may include `preview_url` — the source's A/B sample (female first,
   male fallback). The browser plays it with `preload="none"` and only one
   preview at a time. `sing-catalog-scrape --sample-base …` overrides the
@@ -656,7 +662,8 @@ validated.
 | `SING_MS_PREFIX` | `uploads` | Path prefix inside the ModelScope repo |
 | `SING_UPLOAD_DIR` | — | Local directory for uploaded zips (fallback when HF is unset) |
 | `SING_PUBLIC_BASE_URL` | — | Public base URL that serves `SING_UPLOAD_DIR` (e.g. the plaza origin) |
-| `SING_UPLOAD_MAX_MB` | `300` | Per-submission archive size cap |
+| `SING_UPLOAD_MAX_MB` | `1024` | Per-submission archive size cap (`1`–`4096`); the plaza reads it from `GET /v1/voice-config` |
+| `SING_REFERENCE_MAX_MB` | `256` | Reference-clip upload cap, clamped to `SING_UPLOAD_MAX_MB` (clips are still trimmed to 30s) |
 | `SING_UPLOAD_DAILY_LIMIT` | `5` | Submissions per client IP per day (`0` disables the limit) |
 | `SING_DB_PATH` | `~/.octop/sing.db` | SQLite database for submissions, publication state, events and usage |
 | `SING_VOICE_REQUESTS_FILE` | `~/.octop/sing-voice-requests.json` | Legacy submission JSON, imported once into SQLite |

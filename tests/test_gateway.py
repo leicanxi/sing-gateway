@@ -36,6 +36,21 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_voice_config_reports_upload_limit(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.delenv("SING_UPLOAD_MAX_MB", raising=False)
+    monkeypatch.delenv("SING_REFERENCE_MAX_MB", raising=False)
+    body = _client().get("/v1/voice-config").json()
+    assert body["max_upload_mb"] == 1024
+    assert body["reference_max_mb"] == 256
+    monkeypatch.setenv("SING_UPLOAD_MAX_MB", "2048")
+    assert _client().get("/v1/voice-config").json()["max_upload_mb"] == 2048
+    monkeypatch.setenv("SING_REFERENCE_MAX_MB", "512")
+    assert _client().get("/v1/voice-config").json()["reference_max_mb"] == 512
+    # The clip cap can never exceed the general upload cap.
+    monkeypatch.setenv("SING_UPLOAD_MAX_MB", "300")
+    assert _client().get("/v1/voice-config").json()["reference_max_mb"] == 300
+
+
 def test_lists_sing_song_model(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("SING_GATEWAY_TOKEN", "secret")
     response = _client().get("/v1/models", headers={"Authorization": "Bearer secret"})
